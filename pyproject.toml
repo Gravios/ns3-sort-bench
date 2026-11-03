@@ -31,21 +31,30 @@ classifiers = [
 # release of SpikeInterface change spike-matching semantics mid-benchmark.
 # Bump deliberately via `ns3-sort-bench --bump-deps`; CI re-runs the full
 # smoke suite after every bump.
+# Core deps are STRICT == pins at the latest-compatible set validated on
+# 2026-11-02 (Python 3.13.18, linux-x86_64).  Switching from ~= to ==
+# because benchmark reproducibility is the whole point; a point release
+# of SpikeInterface changing spike-matching semantics mid-benchmark would
+# invalidate every stored score.  Regenerate the pinned set + lockfile
+# with `uv pip compile --python-version 3.13 --extra all pyproject.toml
+# --output-file requirements.lock`; CI re-runs the smoke suite on every
+# pin bump.
 dependencies = [
-    "numpy ~= 2.5.4",
-    "pandas ~= 3.1.0",
-    "pyyaml ~= 6.0.3",
-    "scipy ~= 1.18.1",
+    "numpy == 2.5.4",
+    "pandas == 3.1.0",
+    "pyyaml == 6.0.3",
+    "scipy == 1.18.1",
     "spikeinterface == 0.105.4",
-    "probeinterface ~= 0.4.2",
-    "neo ~= 0.14.6",
-    "tqdm ~= 4.70.1",
+    "probeinterface == 0.4.2",
+    "neo == 0.14.6",
+    "tqdm == 4.70.1",
 ]
 
 [project.optional-dependencies]
-# Each entry is an opt-in sorter + any companion packages it needs.
-# Install with `pip install ns3-sort-bench[kilosort4,dartsort,...]`.
-
+# Each entry is an opt-in sorter + any companion packages it needs,
+# pinned at the latest-compatible set as of 2026-11-02.  Install with
+# `pip install ns3-sort-bench[kilosort4,dartsort,...]`.
+# ---------------------------------------------------------------------
 # Pröpper 2015 BOTM reference needs no extras — ships with core.
 # fiber-kit integration (reads .fetD/.spkD, uses fiber_lib transforms).
 # NOT on PyPI; installed from git.  requirements.lock pins the exact SHA
@@ -55,14 +64,16 @@ fiber-kit = [
     "fiber-kit @ git+https://github.com/Gravios/fiber-kit.git",
 ]
 
-# SpikeInterface-wrapped sorters
-mountainsort5 = ["mountainsort5 ~= 0.5.9"]
-tridesclous2  = ["tridesclous ~= 1.6.9"]
+# SpikeInterface-wrapped sorters.  Latest-compatible as of 2026-11-02;
+# bump requires re-resolving against the full [all] set and re-running CI.
+mountainsort5 = ["mountainsort5 == 0.5.9"]
+tridesclous2  = ["tridesclous == 1.6.9"]
 spykingcircus2 = []   # upstream `circus` package install is per-OS; see docs/sorter-installs.md
-kilosort4     = ["kilosort ~= 4.1.7"]
+kilosort4     = ["kilosort == 4.1.7"]
 
-# DARTsort (Boussard, Varol, Paninski 2023+)
-dartsort = ["dartsort ~= 0.5.31"]
+# DARTsort (Boussard, Varol, Paninski 2023+).  Needs Python >= 3.12 and
+# torch >= 2.2 — upstream metadata takes care of both.
+dartsort = ["dartsort == 0.5.31"]
 
 # SLAy (Janelia 2025).  Upstream pins requires-python = "~=3.11.0", so this
 # extra is INCOMPATIBLE with the rest of [all] on Python 3.12+; install
@@ -74,17 +85,28 @@ slay = [
 ]
 
 # SpikeForest ground-truth corpus loader
-spikeforest = ["spikeforest ~= 0.12.9"]
+spikeforest = ["spikeforest == 0.12.9"]
 
-# IBL public datasets (DARTsort hybrid corpus regeneration)
-ibl = ["ONE-api ~= 2.5.0"]
+# IBL public datasets (DARTsort hybrid corpus regeneration).  Resolver
+# picks ONE-api 3.6.2 when unconstrained; pinned to the latest known
+# compatible with the full [all] set.
+ibl = ["ONE-api == 3.6.2"]
 
 # Performance accelerator for SpikeInterface's comparison code
-accel = ["numba ~= 0.68.1"]
+accel = ["numba == 0.68.1"]
 
-# Everything that is pip-installable from PyPI without GPU wheels
+# CPU-only sorter bundle — no torch, no GPU wheels (~400 MB total install).
 all-cpu = [
     "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spikeforest,accel]",
+]
+
+# EVERYTHING pip-installable in one Python env.  Excludes SLAy (needs
+# its own Python 3.11 env, see the [slay] comment above).  Resolves to
+# ~148 packages, ~3 GB installed with the CUDA 13 wheels torch and
+# faiss pull in.  Verified cleanly on Python 3.13.18 / linux-x86_64 on
+# 2026-11-02.
+all = [
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,kilosort4,dartsort,spikeforest,ibl,accel]",
 ]
 
 # Dev / test
