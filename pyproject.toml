@@ -117,7 +117,11 @@ dev = [
 ]
 
 [project.scripts]
-ns3-sort-bench = "ns3_sort_bench.cli:main"
+# Primary entry point — short, muscle-memory friendly, verb-noun subcommands.
+ns3sb            = "ns3_sort_bench.cli:main"
+# Back-compat alias; forwards to the same main().
+ns3-sort-bench   = "ns3_sort_bench.cli:main"
+# Dashboard renderer stays as its own standalone command.
 ns3-bench-render = "ns3_sort_bench.dashboard.render:main"
 
 [project.urls]
