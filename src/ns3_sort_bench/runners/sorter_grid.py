@@ -51,10 +51,27 @@ def default_run(corpus_names, adapters=None, scorers=None,
     return bench.go()
 
 
+_PAIRED_PREFIX_TO_LOADER = {
+    "paired_crcns_hc1":    "load_paired_crcns_hc1",
+    "paired_kampff":       "load_paired_kampff",
+    "paired_english":      "load_paired_english",
+    "paired_boyden":       "load_paired_boyden",
+    "paired_mea64c_yger":  "load_paired_mea64c_yger",
+    "paired_monotrode":    "load_paired_monotrode",
+}
+
+
 def _resolve_corpus(name: str):
     """Hard-coded corpus registry.  Keeps the CLI self-contained; extend as
     corpora are added (SpikeForest loader, DARTsort hybrid loader, lab
-    session loader, ...)."""
+    session loader, ...).
+
+    Supported keys:
+        propper_sim[_tiny|_medium]      — Propper 2015 overlap simulator
+        paired_<lab>:<item>             — SpikeForest paired recordings, e.g.
+                                          'paired_crcns_hc1:d533101'
+        spikeforest:<study>:<recording> — any SpikeForest item by full id
+    """
     if name.startswith("propper_sim"):
         from ..simulator.propper_overlaps import make_propper_overlap_corpus
         # Allow tiny / small / medium presets via suffix
@@ -69,8 +86,28 @@ def _resolve_corpus(name: str):
             )
         else:
             return make_propper_overlap_corpus(name=name)
-    raise KeyError(f"unknown corpus key: {name} "
-                   "(add a loader for it in sort_benchmark.runners.sorter_grid._resolve_corpus)")
+
+    # SpikeForest full identifier: spikeforest:<study_name>:<recording_name>
+    if name.startswith("spikeforest:"):
+        from ..corpus.spikeforest import load as load_sf
+        _, study, rec = name.split(":", 2)
+        return load_sf(study_name=study, recording_name=rec)
+
+    # Paired convenience keys: paired_<lab>:<item>
+    for prefix, loader_name in _PAIRED_PREFIX_TO_LOADER.items():
+        if name.startswith(prefix + ":"):
+            item = name[len(prefix) + 1:]
+            from .. import corpus as _corpus
+            loader = getattr(_corpus, loader_name)
+            return loader(item)
+
+    raise KeyError(
+        f"unknown corpus key: {name!r}\n"
+        "  known prefixes: propper_sim[_tiny|_medium], "
+        "spikeforest:<study>:<recording>, " + ", ".join(
+            p + ":<item>" for p in _PAIRED_PREFIX_TO_LOADER
+        )
+    )
 
 
 def main(argv=None):
