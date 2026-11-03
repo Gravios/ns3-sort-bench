@@ -47,8 +47,13 @@ dependencies = [
 # Install with `pip install ns3-sort-bench[kilosort4,dartsort,...]`.
 
 # Pröpper 2015 BOTM reference needs no extras — ships with core.
-# fiber-kit integration (reads .fetD/.spkD, uses fiber_lib transforms)
-fiber-kit = ["fiber-kit >= 0.57.6"]
+# fiber-kit integration (reads .fetD/.spkD, uses fiber_lib transforms).
+# NOT on PyPI; installed from git.  requirements.lock pins the exact SHA
+# the harness smoke tests passed against; `pip install [fiber-kit]` on
+# its own tracks the latest commit on main.
+fiber-kit = [
+    "fiber-kit @ git+https://github.com/Gravios/fiber-kit.git",
+]
 
 # SpikeInterface-wrapped sorters
 mountainsort5 = ["mountainsort5 ~= 0.5.9"]
