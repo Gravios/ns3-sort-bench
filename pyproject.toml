@@ -59,8 +59,14 @@ kilosort4     = ["kilosort ~= 4.1.7"]
 # DARTsort (Boussard, Varol, Paninski 2023+)
 dartsort = ["dartsort ~= 0.5.31"]
 
-# SLAy (Janelia 2025) — git only, not on PyPI as of 2026-11-02
-slay = ["slay @ git+https://github.com/JaneliaSciComp/slay.git"]
+# SLAy (Janelia 2025).  Upstream pins requires-python = "~=3.11.0", so this
+# extra is INCOMPATIBLE with the rest of [all] on Python 3.12+; install
+# SLAy standalone in a dedicated Python 3.11 env.  Upstream repo is the
+# first author's — Saikou Koukuntla (saikoukunt), NOT the JaneliaSciComp
+# path earlier scaffolding guessed (that path 404s).
+slay = [
+    "slay @ git+https://github.com/saikoukunt/SLAy.git",
+]
 
 # SpikeForest ground-truth corpus loader
 spikeforest = ["spikeforest ~= 0.12.9"]
