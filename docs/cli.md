@@ -17,6 +17,8 @@ and forwards to the same `main()`.
 | `inspect`    | load one corpus and summarise it (channels, duration, GT) |
 | `contract`   | print one adapter's Contract |
 | `run`        | execute the plan (or a one-shot via flags) |
+| `summary`    | corpus × adapter × metric pivot for one scored run |
+| `compare`    | diff two scored runs (B − A); regressions and improvements separately |
 | `lattice`    | fiber-kit lattice ablation (passes through to `runners.lattice`) |
 | `render`     | render a run directory as HTML dashboard |
 | `doctor`     | environment / adapter readiness check |
@@ -120,6 +122,37 @@ ns3sb doctor
 Reports Python / core deps / optional sorter packages / CUDA / per-adapter
 import readiness.  Exit code is 0 whether or not some adapters are
 unavailable — it's an informational report, not a gate.
+
+## Review past runs
+
+```sh
+# A pivot table for one run (corpus × adapter rows, metric columns)
+ns3sb summary runs/2026-11-03
+ns3sb summary runs/2026-11-03 --metric accuracy,f1,precision,recall
+ns3sb summary runs/2026-11-03 --format csv > review.csv
+
+# Diff two runs: value_b - value_a, biggest absolute movers first
+ns3sb compare runs/baseline runs/candidate
+ns3sb compare runs/baseline runs/candidate --only-regressed
+ns3sb compare runs/baseline runs/candidate --only-improved
+ns3sb compare runs/baseline runs/candidate --metric accuracy --adapter fiber_kit
+```
+
+`compare` joins on `(corpus_item, candidate_adapter, scorer, metric)`.
+Rows present in only one run keep that side's value with the other as `—`.
+
+## Your own data (lab sessions)
+
+```sh
+# Default group / variant / tag (g7 pyramidal, stderiv_C5_D34, exp_final)
+ns3sb load lab:/data/g7_session.yaml
+# All four spelled out
+ns3sb load lab:/data/g6_0316.yaml:6:stderiv_C5_D34:exp_final
+```
+
+The curated sort named by `<variant>:<tag>` serves as the reference
+SortedResult; every registered adapter is run on the raw recording and
+scored against it.
 
 ## Dashboard
 

@@ -71,6 +71,10 @@ def _resolve_corpus(name: str):
         paired_<lab>:<item>             — SpikeForest paired recordings, e.g.
                                           'paired_crcns_hc1:d533101'
         spikeforest:<study>:<recording> — any SpikeForest item by full id
+        lab:<yaml>[:<group>[:<variant>:<tag>]]
+                                        — lab session + curated GT, e.g.
+                                          'lab:/data/g7_session.yaml:7:stderiv_C5_D34:exp_final'
+                                          (defaults: group=7, variant=stderiv_C5_D34, tag=exp_final)
     """
     if name.startswith("propper_sim"):
         from ..simulator.propper_overlaps import make_propper_overlap_corpus
@@ -101,10 +105,29 @@ def _resolve_corpus(name: str):
             loader = getattr(_corpus, loader_name)
             return loader(item)
 
+    # Lab session: lab:<yaml>[:<group>[:<variant>:<tag>]]
+    if name.startswith("lab:"):
+        from ..corpus.lab_sessions import load as load_lab
+        parts = name.split(":")
+        # parts[0] == "lab"; parts[1] == path (possibly with Windows drive).
+        # On Linux, path never contains ':', so a simple split suffices.  On
+        # Windows an absolute path like C:/foo splits on the drive colon, so
+        # tolerate both: re-glue if parts[1] is a single letter.
+        tail = parts[1:]
+        if len(tail) >= 2 and len(tail[0]) == 1 and tail[0].isalpha():
+            tail = [tail[0] + ":" + tail[1]] + tail[2:]
+        yaml_path = tail[0]
+        group   = int(tail[1]) if len(tail) >= 2 and tail[1] else 7
+        variant = tail[2]      if len(tail) >= 3 and tail[2] else "stderiv_C5_D34"
+        tag     = tail[3]      if len(tail) >= 4 and tail[3] else "exp_final"
+        return load_lab(yaml_path, electrode_group=group,
+                        variant=variant, tag=tag)
+
     raise KeyError(
         f"unknown corpus key: {name!r}\n"
         "  known prefixes: propper_sim[_tiny|_medium], "
-        "spikeforest:<study>:<recording>, " + ", ".join(
+        "spikeforest:<study>:<recording>, "
+        "lab:<yaml>[:<group>[:<variant>:<tag>]], " + ", ".join(
             p + ":<item>" for p in _PAIRED_PREFIX_TO_LOADER
         )
     )

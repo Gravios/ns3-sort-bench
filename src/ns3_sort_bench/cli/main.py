@@ -10,6 +10,7 @@ from .commands import (
     list_cmd,
     misc_cmd,
     plan_cmd,
+    review_cmd,
     run_cmd,
 )
 from .plan import plan_path
@@ -37,6 +38,15 @@ examples:
   ns3sb inspect paired_crcns_hc1:d533101
   ns3sb contract fiber_kit --format markdown
   ns3sb doctor
+
+  # review past runs
+  ns3sb summary runs/baseline
+  ns3sb compare runs/baseline runs/candidate --only-regressed
+  ns3sb compare runs/baseline runs/candidate --metric accuracy,f1
+
+  # your own data (CA1 lab session + curated GT)
+  ns3sb load lab:/data/g7_session.yaml
+  ns3sb load lab:/data/g6_0316.yaml:6:stderiv_C5_D34:exp_final
 """
 
 
@@ -62,6 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     contract_cmd.register(sub)
     # Running
     run_cmd.register(sub)
+    # Review of previous runs
+    review_cmd.register(sub)
     misc_cmd.register_lattice(sub)
     misc_cmd.register_render(sub)
     misc_cmd.register_doctor(sub)
