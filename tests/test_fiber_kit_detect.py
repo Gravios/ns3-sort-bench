@@ -17,12 +17,16 @@ from ns3_sort_bench.adapters.fiber_kit import (
     _extract_snippets,
     _write_res,
     _write_spk,
+    _write_fet,
+    _compute_features,
     _klusters_path,
     _NS_SAMPLES,
     _NS_PEAK,
     _NS3_METHOD,
     _RES_DTYPE,
     _SPK_DTYPE,
+    _FET_DTYPE,
+    _FET_HDR_DTYPE,
 )
 
 
@@ -235,6 +239,56 @@ def test_shared_detection_uses_ground_truth_res(tmp_path):
     assert n_written == safe.size
 
 
+# ─── .fet writer / feature computation ──────────────────────────────────────
+def test_compute_features_shape_and_dtype():
+    """`_compute_features` returns (n_spikes, n_pcs * n_ch + 1) int64."""
+    rng = np.random.default_rng(0)
+    snippets = rng.integers(-1000, 1000,
+                             size=(50, _NS_SAMPLES, 4)).astype(np.int16)
+    peaks = np.arange(50, dtype=np.int64) * 100
+    feats = _compute_features(snippets, peaks, n_pcs_per_channel=3)
+    assert feats.shape == (50, 3 * 4 + 1)
+    assert feats.dtype == _FET_DTYPE
+    # Last column is the time feature, scaled to int
+    assert (feats[:, -1] == (peaks * 10_000).astype(_FET_DTYPE)).all()
+
+
+def test_compute_features_empty_input():
+    empty_snips = np.zeros((0, _NS_SAMPLES, 4), dtype=np.int16)
+    empty_peaks = np.zeros(0, dtype=np.int64)
+    feats = _compute_features(empty_snips, empty_peaks, n_pcs_per_channel=3)
+    assert feats.shape == (0, 3 * 4 + 1)
+
+
+def test_write_fet_byte_layout(tmp_path):
+    """fiber-kit's `read_fet_file`: int32 header(nFeatures) + int64 body."""
+    feats = np.array([[1, 2, 3, 100],
+                      [4, 5, 6, 200]], dtype=_FET_DTYPE)
+    path = str(tmp_path / "x.fet.standard.1")
+    _write_fet(path, feats)
+    # Expected bytes = 4 (header) + 2*4*8 = 68
+    assert Path(path).stat().st_size == 4 + feats.size * 8
+    with open(path, "rb") as f:
+        hdr = np.fromfile(f, dtype="<i4", count=1)
+        body = np.fromfile(f, dtype="<i8")
+    assert int(hdr[0]) == 4
+    assert body.reshape(2, 4).tolist() == feats.tolist()
+
+
+def test_detect_and_write_klusters_emits_fet_too(tmp_path):
+    """.fet.standard.<g> must land alongside .res + .spk."""
+    tr, _, sr = _synth_tetrode(n_samp=20000 * 3, spike_hz=40.0, seed=7)
+    rec = _FakeRec(tr, sr)
+    base = str(tmp_path / "session")
+    n_detected = detect_and_write_klusters(rec, base=base, group=1,
+                                            n_pcs_per_channel=3)
+    fet_path = Path(f"{base}.fet.standard.1")
+    assert fet_path.exists()
+    # Header byte count + body byte count
+    expected_body_bytes = n_detected * (3 * tr.shape[1] + 1) * 8
+    assert fet_path.stat().st_size == 4 + expected_body_bytes
+
+
 def test_detect_and_write_zero_spikes_returns_zero(tmp_path):
     rng = np.random.default_rng(0)
     tr = (rng.standard_normal((20000 * 2, 4)) * 10.0).astype(np.float32)
@@ -243,9 +297,11 @@ def test_detect_and_write_zero_spikes_returns_zero(tmp_path):
     n = detect_and_write_klusters(rec, base=base, group=1,
                                    threshold_sigma=15.0)
     assert n < 20
-    # Files are still written (possibly empty .res, correspondingly sized .spk)
+    # All three files still land — downstream readers rely on the triple
+    # being present and self-consistent, even when empty.
     assert Path(f"{base}.res.standard.1").exists()
     assert Path(f"{base}.spk.standard.1").exists()
+    assert Path(f"{base}.fet.standard.1").exists()
 
 
 # ─── fiber-kit.yaml setup ───────────────────────────────────────────────────

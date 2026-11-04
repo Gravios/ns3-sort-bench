@@ -63,10 +63,20 @@ _NS3_METHOD = "standard"
 #   .spk.<method>.<g>   SPK_DTYPE  = np.dtype("<i2")  binary int16 LE, no header,
 #                                                     sample-major, C-order
 #                                                     (n_spikes, nsamp, nchan)
-# fiber-session's `main()` reads .res + .spk at entry; .fet / .clu / .nst are
-# outputs or optional.
-_RES_DTYPE = np.dtype("<i8")
-_SPK_DTYPE = np.dtype("<i2")
+#   .fet.<method>.<g>   FET_HDR_DTYPE = np.dtype("<i4") × 1 (n_features header)
+#                        FET_DTYPE     = np.dtype("<i8") × (n_spikes × n_features)
+#                                        row-major; last column is the spike sample index
+# fiber-session's `main()` reads .res + .spk at entry; fiber-kit's later stages
+# (realign / refine / peel / intrachunk / link) and Klusters open the .fet, so
+# writing it alongside .res / .spk keeps every downstream consumer happy.
+_RES_DTYPE     = np.dtype("<i8")
+_SPK_DTYPE     = np.dtype("<i2")
+_FET_HDR_DTYPE = np.dtype("<i4")
+_FET_DTYPE     = np.dtype("<i8")
+# PCA features are floats; Klusters stores them as int64 scaled by this
+# factor so modest precision survives the round-trip.  Matches the
+# traditional ndm_pca scaling; exact value is immaterial for a benchmark.
+_FET_INT_SCALE = 10_000.0
 
 
 def _klusters_path(base: str, type_: str, group: int, method: str = _NS3_METHOD) -> str:
@@ -166,20 +176,81 @@ def _write_spk(path: str, snippets_i16: np.ndarray) -> None:
         arr.tofile(f)
 
 
+def _compute_features(snippets: np.ndarray, peaks: np.ndarray,
+                       n_pcs_per_channel: int = 3) -> np.ndarray:
+    """PCA features for Klusters-style .fet files.
+
+    Returns an (n_spikes, n_pcs_per_channel × n_channels + 1) int64 matrix.
+    The last column is the spike sample index (time feature) so KK's
+    `useFeatures` default of masking that one off works as expected.
+
+    Per-channel PCA: for each channel, SVD the centred (n_spikes, n_samples)
+    waveform matrix and keep the top `n_pcs_per_channel` components.  Values
+    are scaled by `_FET_INT_SCALE` and cast to int64 — Klusters' on-disk
+    convention preserves modest fractional precision through the int round-trip.
+    """
+    n_spikes, n_samples, n_ch = snippets.shape
+    if n_spikes == 0:
+        return np.zeros((0, n_pcs_per_channel * n_ch + 1), dtype=_FET_DTYPE)
+    cols = []
+    for ch in range(n_ch):
+        X = snippets[:, :, ch].astype(np.float64)
+        X -= X.mean(axis=0, keepdims=True)
+        # Rank is min(n_spikes, n_samples); if the caller asked for more PCs
+        # than available, pad with zeros so the output shape is deterministic.
+        k = min(int(n_pcs_per_channel), X.shape[1], X.shape[0])
+        if k == 0:
+            cols.append(np.zeros((n_spikes, n_pcs_per_channel), dtype=np.float64))
+            continue
+        U, S, _ = np.linalg.svd(X, full_matrices=False)
+        pc = U[:, :k] * S[:k]
+        if k < n_pcs_per_channel:
+            pc = np.hstack([pc, np.zeros((n_spikes, n_pcs_per_channel - k))])
+        cols.append(pc)
+    cols.append(peaks.astype(np.float64).reshape(-1, 1))     # time column
+    features = np.hstack(cols)
+    scaled = np.rint(features * _FET_INT_SCALE).astype(_FET_DTYPE)
+    return scaled
+
+
+def _write_fet(path: str, features: np.ndarray) -> None:
+    """Binary int32 header (nFeatures per row) + int64 body, row-major.
+
+    Matches fiber-kit's `write_fet_file` / Klusters' `readFetBinary` / ndm_pca
+    byte layout — the format the full fiber-kit pipeline and the KK recluster
+    step both expect.
+    """
+    if features.ndim != 2:
+        raise ValueError(f"features must be 2-D, got shape {features.shape}")
+    n_features = int(features.shape[1])
+    body = np.ascontiguousarray(features, dtype=_FET_DTYPE)
+    with open(path, "wb") as f:
+        np.array([n_features], dtype=_FET_HDR_DTYPE).tofile(f)
+        body.tofile(f)
+
+
 def detect_and_write_klusters(recording, base: str, group: int,
                                 *, threshold_sigma: float = _DEFAULT_THRESHOLD_SIGMA,
                                 dead_time_ms: float = _DEFAULT_DEAD_TIME_MS,
                                 n_samples: int = _NS_SAMPLES,
                                 peak_sample: int = _NS_PEAK,
+                                n_pcs_per_channel: int = 3,
                                 shared_res: Optional[np.ndarray] = None,
                                 ) -> int:
-    """Produce `<base>.res.<group>` + `<base>.spk.<group>` from a
-    SpikeInterface BaseRecording.  Returns the number of spikes written.
+    """Produce the Klusters-convention per-group files from a SpikeInterface
+    BaseRecording:
+
+        <base>.res.standard.<group>   binary int64 ascending sample indices
+        <base>.spk.standard.<group>   binary int16 sample-major waveforms
+        <base>.fet.standard.<group>   binary int32 header + int64 features
+
+    Returns the number of spikes written.  Every downstream fiber-kit stage
+    or Klusters consumer finds all three files under ns3's canonical
+    `<base>.<type>.<method>.<group>` naming.
 
     When `shared_res` is provided (a 1-D int array of sample indices), those
     are used as the detections instead of running the MAD detector.
-    Snippets are still extracted from the filtered trace so fiber-session
-    has `.spk` to work with.
+    Snippets + features are still derived from the filtered trace.
     """
     # Load traces (bytes are small for paired tetrode items; chunk later if needed).
     n_samp = int(recording.get_num_samples(0))
@@ -195,6 +266,9 @@ def detect_and_write_klusters(recording, base: str, group: int,
                                         peak_sample=peak_sample)
     _write_res(_klusters_path(base, "res", group), kept)
     _write_spk(_klusters_path(base, "spk", group), snippets)
+    features = _compute_features(snippets, kept,
+                                  n_pcs_per_channel=n_pcs_per_channel)
+    _write_fet(_klusters_path(base, "fet", group), features)
     return int(kept.size)
 
 
@@ -376,12 +450,25 @@ class _FiberKitBase(SorterAdapter):
                         "ground_truth_res (the GT's spike sample indices)."
                     )
                 shared_res = np.asarray(ground_truth_res, dtype=_RES_DTYPE)
+            # Honour the session yaml's `nFeatures` (PC count per channel)
+            # when the loader attached one; otherwise fall back to 3 (the
+            # ns3 default and what template.yaml writes).
+            n_pcs = 3
+            try:
+                sd = (ns3_yaml or {}).get("spikeDetection", {})
+                groups = sd.get("channelGroups", []) if isinstance(sd, dict) else []
+                g = groups[group - 1] if 1 <= group <= len(groups) else {}
+                if isinstance(g, dict) and g.get("nFeatures"):
+                    n_pcs = int(g["nFeatures"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
             n_detected = detect_and_write_klusters(
                 recording, sess_base, group,
                 threshold_sigma=float(kwargs.get("detect_threshold_sigma",
                                                   _DEFAULT_THRESHOLD_SIGMA)),
                 dead_time_ms=float(kwargs.get("detect_dead_time_ms",
                                                _DEFAULT_DEAD_TIME_MS)),
+                n_pcs_per_channel=int(kwargs.get("n_pcs_per_channel", n_pcs)),
                 shared_res=shared_res,
             )
             if n_detected == 0:

@@ -126,30 +126,54 @@ def _find_recording(study_name: str, recording_name: str,
 
 
 # ─── Corpus wrapping ─────────────────────────────────────────────────────────
+# ns3 / Klusters conventions reserve unit IDs 0 (artefact) and 1 (noise); real
+# units land at >= 2, and every reserved-ID-aware scorer drops those.
+# SpikeForest paired recordings use unit 1 as the patched reference cell, and
+# other sorting-truth stores commonly start at 0 or 1 too — the whole GT would
+# vanish on dropped_reserved().  Shift every upstream GT unit id by this offset
+# so the Klusters-convention filter sees them as real units.  SortedResult
+# records the offset in .extras so a diagnostic can reverse it if needed.
+_GT_UNIT_ID_OFFSET = 2
+
+
 def _sorting_true_to_sorted_result(sorting_ext, *, corpus_item: str,
-                                    sampling_rate: float) -> SortedResult:
+                                    sampling_rate: float,
+                                    unit_id_offset: int = _GT_UNIT_ID_OFFSET
+                                    ) -> SortedResult:
     """Convert a SpikeInterface BaseSorting (ground truth) → SortedResult.
 
     For paired recordings, SpikeForest ground truth is typically ONE unit
     (the simultaneously-patched cell).  For synthetic ones, it's all injected
     cells.  Either way, the shape is: unit_ids → spike-sample arrays.
+
+    Every unit id is shifted by ``unit_id_offset`` (default 2) so the Klusters
+    reserved-ID convention (0 = artefact, 1 = noise) does not swallow the
+    real GT units.  The original SpikeForest id is kept per unit in
+    ``extras['unit_id_sf_original']`` as `{shifted_id: original_id}`.
     """
-    unit_ids = list(sorting_ext.get_unit_ids())
+    unit_ids_raw = list(sorting_ext.get_unit_ids())
     spike_times = {}
-    for u in unit_ids:
+    original_by_shifted = {}
+    for u in unit_ids_raw:
         try:
             train = sorting_ext.get_unit_spike_train(u)
         except TypeError:
             # Some SI versions want segment_index=0 explicitly
             train = sorting_ext.get_unit_spike_train(u, segment_index=0)
-        spike_times[int(u)] = np.asarray(train, dtype=np.int64)
+        shifted = int(u) + int(unit_id_offset)
+        spike_times[shifted] = np.asarray(train, dtype=np.int64)
+        original_by_shifted[shifted] = int(u)
     return SortedResult(
-        unit_ids=[int(u) for u in unit_ids],
+        unit_ids=sorted(spike_times),
         spike_times=spike_times,
         sampling_rate=float(sampling_rate),
         adapter="ground_truth",
         corpus_item=corpus_item,
         adapter_version="spikeforest",
+        extras={
+            "unit_id_offset": int(unit_id_offset),
+            "unit_id_sf_original": original_by_shifted,
+        },
     )
 
 
