@@ -15,8 +15,12 @@ from ns3_sort_bench.adapters.fiber_kit import (
     _bandpass,
     _detect_peak_indices,
     _extract_snippets,
+    _write_res,
+    _write_spk,
     _NS_SAMPLES,
     _NS_PEAK,
+    _RES_DTYPE,
+    _SPK_DTYPE,
 )
 
 
@@ -128,6 +132,41 @@ def test_extract_snippets_shape_and_boundary_drop():
     assert snips.dtype == np.int16
 
 
+# ─── byte-level format contracts (must match fiber_kit/neuro_io.py) ─────────
+def test_dtypes_match_fiber_kit():
+    """_RES_DTYPE and _SPK_DTYPE are the fiber-kit on-disk contract."""
+    assert _RES_DTYPE == np.dtype("<i8")
+    assert _SPK_DTYPE == np.dtype("<i2")
+
+
+def test_write_res_is_binary_int64(tmp_path):
+    """Produces exactly N*8 bytes binary, round-trippable through
+    np.fromfile(dtype='<i8') — the exact call fiber-kit's read_res_file makes."""
+    samples = np.array([5, 10_000_000, 42, 7], dtype=np.int64)
+    path = str(tmp_path / "x.res.1")
+    _write_res(path, samples)
+    size = Path(path).stat().st_size
+    assert size == samples.size * 8, (size, samples.size * 8)
+    roundtrip = np.fromfile(path, dtype="<i8")
+    assert roundtrip.tolist() == sorted(samples.tolist())
+
+
+def test_write_spk_round_trips_through_fiber_kit_reshape(tmp_path):
+    """fiber-kit's open_spk_file does:
+        np.memmap(path, dtype='<i2').reshape(n, nsamp, nchan)
+    so writing a C-order (n, nsamp, nchan) int16 array must round-trip
+    through exactly that call."""
+    rng = np.random.default_rng(0)
+    snips = (rng.integers(-1000, 1000,
+                           size=(7, _NS_SAMPLES, 4))).astype(np.int16)
+    path = str(tmp_path / "x.spk.1")
+    _write_spk(path, snips)
+    assert Path(path).stat().st_size == 7 * _NS_SAMPLES * 4 * 2
+    flat = np.fromfile(path, dtype="<i2")
+    out = flat.reshape(7, _NS_SAMPLES, 4)
+    assert np.array_equal(out, snips)
+
+
 # ─── end-to-end .res + .spk writer ──────────────────────────────────────────
 def test_detect_and_write_klusters_files_and_shapes(tmp_path):
     tr, truth, sr = _synth_tetrode(n_samp=20000 * 3, spike_hz=40.0, seed=2)
@@ -139,16 +178,28 @@ def test_detect_and_write_klusters_files_and_shapes(tmp_path):
     spk_path = Path(f"{base}.spk.1")
     assert res_path.exists() and spk_path.exists()
 
-    # .res: one integer per line, strictly ascending, 0-indexed
-    lines = res_path.read_text().splitlines()
-    assert len(lines) == n_detected
-    samples = [int(x) for x in lines]
-    assert samples == sorted(samples)
-    assert all(0 <= s < tr.shape[0] for s in samples)
+    # .res: binary int64 LE, ascending, 0-indexed, exact byte count
+    assert res_path.stat().st_size == n_detected * 8
+    samples = np.fromfile(res_path, dtype="<i8")
+    assert samples.size == n_detected
+    assert np.all(np.diff(samples) >= 0)
+    assert np.all((samples >= 0) & (samples < tr.shape[0]))
 
-    # .spk: int16, size exactly nspikes * 32 * n_ch * 2 bytes
+    # .spk: int16 LE, size exactly nspikes * 32 * n_ch * 2 bytes
     expected_bytes = n_detected * _NS_SAMPLES * tr.shape[1] * 2
     assert spk_path.stat().st_size == expected_bytes
+
+
+def test_res_and_spk_counts_agree(tmp_path):
+    """fiber-session's `check_spk_count` asserts the two writers agree.
+    This is the exact regression that broke the paired-recordings sweep."""
+    tr, _, sr = _synth_tetrode(n_samp=20000 * 4, spike_hz=35.0, seed=4)
+    rec = _FakeRec(tr, sr)
+    base = str(tmp_path / "session")
+    n = detect_and_write_klusters(rec, base=base, group=3)
+    n_from_res = Path(f"{base}.res.3").stat().st_size // 8
+    n_from_spk = Path(f"{base}.spk.3").stat().st_size // (_NS_SAMPLES * tr.shape[1] * 2)
+    assert n_from_res == n_from_spk == n
 
 
 def test_shared_detection_uses_ground_truth_res(tmp_path):
@@ -162,8 +213,8 @@ def test_shared_detection_uses_ground_truth_res(tmp_path):
     base = str(tmp_path / "session")
     n_written = detect_and_write_klusters(rec, base=base, group=2,
                                            shared_res=safe)
-    lines = [int(x) for x in Path(f"{base}.res.2").read_text().splitlines()]
-    assert lines == sorted(safe.tolist())
+    on_disk = np.fromfile(f"{base}.res.2", dtype="<i8").tolist()
+    assert on_disk == sorted(safe.tolist())
     assert n_written == safe.size
 
 

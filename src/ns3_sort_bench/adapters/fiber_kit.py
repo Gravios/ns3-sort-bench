@@ -44,6 +44,15 @@ _DEFAULT_THRESHOLD_SIGMA = 5.0
 _DEFAULT_DEAD_TIME_MS    = 0.5
 _BAND_HZ = (300.0, 6000.0)
 
+# Byte-level fiber-kit file formats (from fiber_kit/neuro_io.py):
+#   .res.<g>   RES_DTYPE  = np.dtype("<i8")  binary int64 LE, no header
+#   .spk.<g>   SPK_DTYPE  = np.dtype("<i2")  binary int16 LE, no header,
+#                                             C-order (n_spikes, nsamp, nchan)
+# fiber-session's `main()` reads only .res + .spk at entry; .fet / .clu / .nst
+# are outputs or optional.
+_RES_DTYPE = np.dtype("<i8")
+_SPK_DTYPE = np.dtype("<i2")
+
 
 def _bandpass(traces: np.ndarray, sr: float,
               low: float = _BAND_HZ[0], high: float = _BAND_HZ[1]) -> np.ndarray:
@@ -85,23 +94,41 @@ def _extract_snippets(traces_filt: np.ndarray, peaks: np.ndarray,
     after = n_samples - peak_sample
     ok = (peaks >= before) & (peaks + after <= n_total)
     kept = peaks[ok]
-    out = np.empty((kept.size, n_samples, n_ch), dtype=np.int16)
+    out = np.empty((kept.size, n_samples, n_ch), dtype=_SPK_DTYPE)
     for i, p in enumerate(kept):
         s0 = int(p) - before
         s1 = s0 + n_samples
-        out[i] = np.clip(np.rint(traces_filt[s0:s1]), -32768, 32767).astype(np.int16)
+        out[i] = np.clip(np.rint(traces_filt[s0:s1]), -32768, 32767).astype(_SPK_DTYPE)
     return kept, out
 
 
 def _write_res(path: str, peak_samples: np.ndarray) -> None:
-    """One sample index per line, 0-indexed, ASCII — Klusters convention."""
-    with open(path, "w") as f:
-        f.writelines(f"{int(s)}\n" for s in sorted(peak_samples))
+    """Binary little-endian int64, ascending, no header.
+
+    This is what fiber-kit's `read_res_file` expects:
+        return np.fromfile(path, dtype=RES_DTYPE).astype(np.int64)
+    An ASCII "<int>\\n" per line format decodes as random int64s whose byte
+    count divides into a near-correct spike count by coincidence (~8 bytes
+    per line ≈ 8 bytes per int64) and fails fiber-session's `.res`/`.spk`
+    cross-check at a slightly-off number — observed as "5,942 vs 6,053
+    spikes -- per-spike files out of step" before this patch.
+    """
+    arr = np.sort(np.asarray(peak_samples, dtype=_RES_DTYPE).ravel())
+    with open(path, "wb") as f:
+        arr.tofile(f)
 
 
 def _write_spk(path: str, snippets_i16: np.ndarray) -> None:
-    """Raw int16 binary, C-order, shape (n_spikes, n_samples, n_ch)."""
-    snippets_i16.astype(np.int16, copy=False).tofile(path)
+    """Binary little-endian int16, C-order (n_spikes, n_samples, n_ch), no header.
+
+    fiber-kit's `open_spk_file` memmaps as flat int16 and reshapes to
+    (n, nsamp, nchan) — so the byte layout must put sample-0 across all
+    channels first, then sample-1, etc., within each spike.  C-order of
+    the (n_spikes, n_samples, n_ch) array gives exactly that layout.
+    """
+    arr = np.ascontiguousarray(snippets_i16, dtype=_SPK_DTYPE)
+    with open(path, "wb") as f:
+        arr.tofile(f)
 
 
 def detect_and_write_klusters(recording, base: str, group: int,
@@ -127,7 +154,7 @@ def detect_and_write_klusters(recording, base: str, group: int,
     if shared_res is None:
         peaks = _detect_peak_indices(traces_f, sr, threshold_sigma, dead_time_ms)
     else:
-        peaks = np.asarray(shared_res, dtype=np.int64)
+        peaks = np.asarray(shared_res, dtype=_RES_DTYPE)
     kept, snippets = _extract_snippets(traces_f, peaks,
                                         n_samples=n_samples,
                                         peak_sample=peak_sample)
