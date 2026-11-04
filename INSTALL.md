@@ -12,6 +12,10 @@ pip install ns3-sort-bench[all-cpu]
 # Everything except SLAy (~148 packages, ~3 GB with CUDA 13 wheels)
 pip install ns3-sort-bench[all]
 
+# Developing the harness itself — [all] + ruff; same packages as [all]
+# plus the linter.
+pip install ns3-sort-bench[dev]
+
 # Reproducible — install the exact resolved environment the smoke tests pass against
 pip install -r requirements.lock
 pip install -e .
@@ -58,8 +62,17 @@ extra explicitly:
 pip install 'ns3-sort-bench[test]'
 ```
 
-Add `[dev]` instead if you want ruff for linting / formatting alongside
-pytest.
+`[dev]` is the kitchen-sink developer install: it references `[all]`
+(which already includes `[test]`) and adds ruff on top, so one
+command gives you the full sorter stack, corpora loaders, test
+runner, and linter:
+
+```sh
+pip install 'ns3-sort-bench[dev]'
+```
+
+Pick `[test]` instead when you want the test runner but only a chosen
+subset of sorter extras — e.g. `pip install 'ns3-sort-bench[fiber-kit,test]'`.
 
 ## What `[all]` does NOT include — SLAy
 

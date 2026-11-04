@@ -108,9 +108,14 @@ test = [
     "pytest-cov == 7.1.0",
 ]
 
-# Dev / test — adds a linter on top of [test].
+# Dev / test — a single-command "I'm developing on this" install.
+# References [all] (which already pulls [test]) + ruff on top, so one
+# `pip install ns3-sort-bench[dev]` yields the full sorter stack, the
+# corpora loaders, pytest, pytest-cov, and ruff.  Pick [test] (lighter)
+# if you only want to run the test suite against a chosen subset of
+# extras — e.g. `pip install ns3-sort-bench[fiber-kit,test]`.
 dev = [
-    "ns3-sort-bench[test]",
+    "ns3-sort-bench[all]",
     "ruff == 0.17.3",
 ]
 
