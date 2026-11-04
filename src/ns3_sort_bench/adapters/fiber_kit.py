@@ -74,6 +74,21 @@ def _klusters_path(base: str, type_: str, group: int, method: str = _NS3_METHOD)
     return f"{base}.{type_}.{method}.{group}"
 
 
+_SLUG_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+")
+
+
+def _slugify(name: str) -> str:
+    """Filesystem-safe form of a corpus-item name.  Keeps `[A-Za-z0-9._+-]`,
+    replaces every other character (including `:` and `/`) with `_`.
+    Collapses adjacent underscores and trims leading/trailing ones.
+    """
+    out = "".join(c if c in _SLUG_SAFE else "_" for c in name)
+    # collapse runs
+    parts = [p for p in out.split("_") if p]
+    slug = "_".join(parts) or "sort"
+    return slug[:200]   # keep room for the .fiber-session.log etc. names
+
+
 def _bandpass(traces: np.ndarray, sr: float,
               low: float = _BAND_HZ[0], high: float = _BAND_HZ[1]) -> np.ndarray:
     """4th-order Butterworth bandpass along axis 0.  Returns float64."""
@@ -333,9 +348,21 @@ class _FiberKitBase(SorterAdapter):
         sess_base = recording.get_annotation("session_base", None)
         tmp_dir = None
         materialised = False
+        keep_artifacts = False
         if sess_base is None:
             materialised = True
-            tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
+            fk_artifacts_dir = kwargs.get("fk_artifacts_dir")
+            if fk_artifacts_dir:
+                # Persistent mode: place the session dir under the caller's
+                # artifacts root, named by the corpus item (slugified).  The
+                # dir is NOT deleted after the sort finishes — its full
+                # contents survive for post-hoc inspection.
+                slug = _slugify(str(kwargs.get("corpus_name") or "sort"))
+                tmp_dir = os.path.join(fk_artifacts_dir, slug)
+                os.makedirs(tmp_dir, exist_ok=True)
+                keep_artifacts = True
+            else:
+                tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
             sess_base = self._materialise_recording(recording, tmp_dir)
             # fiber-session expects a Klusters-convention .res + .spk alongside
             # the .fil / .yaml we just wrote.  Detect and emit them now,
@@ -407,17 +434,26 @@ class _FiberKitBase(SorterAdapter):
 
         extras = dict(mode=self._mode, electrode_group=group,
                        variant=variant, tag=tag, session_base=sess_base)
-        if tmp_dir and not kwargs.get("preserve_outputs", False):
-            try: shutil.rmtree(tmp_dir)
-            except OSError: pass
-        elif tmp_dir:
-            extras["output_dir"] = tmp_dir
+        # Cleanup policy, in order of precedence:
+        #   keep_artifacts (set when the harness passed fk_artifacts_dir)  → always keep
+        #   preserve_outputs=True kwarg                                     → always keep
+        #   otherwise, sort-success                                         → delete tmp
+        if tmp_dir:
+            if keep_artifacts or kwargs.get("preserve_outputs", False):
+                extras["output_dir"] = tmp_dir
+            else:
+                try: shutil.rmtree(tmp_dir)
+                except OSError: pass
 
         return SortedResult(
             unit_ids=sorted(spike_times), spike_times=spike_times,
             sampling_rate=recording.get_sampling_frequency(),
             adapter=self._mode,
-            corpus_item=str(recording.get_annotation("name", sess_base)),
+            # Placeholder; BenchmarkRun.go overrides with the authoritative
+            # `corpus.name`.  Any value works, but keep sess_base so direct
+            # (harness-bypassing) calls to adapter.sort() produce a useful
+            # debuggable identifier.
+            corpus_item=sess_base,
             adapter_version=self._version,
             channels=list(recording.get_channel_ids()),
             wall_time_s=rt["wall_time_s"], peak_rss_mb=rt["peak_rss_mb"],

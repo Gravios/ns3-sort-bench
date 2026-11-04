@@ -193,12 +193,23 @@ def _as_dict(obj):
 class BenchmarkRun:
     """Orchestrates (corpus × adapter × scorer) grids.  Each adapter's
     Contract is validated against (ns3_yaml, recording) before the sort;
-    violations produce a skip with reasons."""
+    violations produce a skip with reasons.
+
+    `adapter_kwargs` is forwarded to every `adapter.sort()` call.  Adapters
+    ignore keys they don't know.  Current contract:
+
+        fk_artifacts_dir : str  — the fiber-kit family places its per-sort
+                                   session dir at
+                                   `<fk_artifacts_dir>/<corpus_item_slug>/`
+                                   and does not delete it afterwards.
+                                   Wired from `ns3sb set keep-fk-artifacts`.
+    """
     output_dir: str = "runs"
     corpora: List[Corpus] = field(default_factory=list)
     adapters: List[SorterAdapter] = field(default_factory=list)
     scorers: List[Scorer] = field(default_factory=list)
     verbose: bool = True
+    adapter_kwargs: Mapping[str, Any] = field(default_factory=dict)
 
     def add_corpus(self, c: Corpus) -> "BenchmarkRun":
         self.corpora.append(c); return self
@@ -252,9 +263,19 @@ class BenchmarkRun:
                     with measure_runtime() as rt:
                         candidate = adapter.sort(
                             corpus.recording, ns3_yaml=corpus.ns3_yaml,
+                            corpus_name=corpus.name,
+                            **dict(self.adapter_kwargs),
                         )
+                    # The corpus is the authoritative source of the item name
+                    # (it drives the task list on the ref side too), so
+                    # override whatever the adapter set.  Fixes a class of bugs
+                    # where an adapter falls back to None/"None"/a tmp path —
+                    # pandas's default `na_values` contains "None", so a row
+                    # written with `corpus_item="None"` read back as NaN and
+                    # silently vanished from pivots.
                     candidate = SortedResult(**{
                         **_as_dict(candidate),
+                        "corpus_item": corpus.name,
                         "wall_time_s": rt["wall_time_s"],
                         "peak_rss_mb": rt["peak_rss_mb"],
                     })

@@ -58,7 +58,16 @@ def cmd_run(args) -> int:
         return 0
 
     # ─ build + run ─
-    bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet)
+    adapter_kwargs = {}
+    if plan.keep_fk_artifacts:
+        # Every fiber-kit mode honours `fk_artifacts_dir`.  The adapter
+        # places its session dir under `<fk_artifacts_dir>/<corpus_slug>/`
+        # and never deletes it, so every .res / .spk / .clu / stage log
+        # survives the sort for post-hoc inspection by Klusters / fiber-view.
+        adapter_kwargs["fk_artifacts_dir"] = f"{output_dir}/fiber_kit"
+
+    bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
+                          adapter_kwargs=adapter_kwargs)
 
     for key in corpus_keys:
         try:
@@ -76,6 +85,8 @@ def cmd_run(args) -> int:
     df = bench.go()
     if not args.quiet:
         print(f"\nwrote {output_dir}/scores.csv  ({len(df)} rows)")
+        if plan.keep_fk_artifacts:
+            print(f"fiber-kit artifacts kept under {output_dir}/fiber_kit/")
     return 0
 
 

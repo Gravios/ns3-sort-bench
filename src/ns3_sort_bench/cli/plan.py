@@ -48,6 +48,7 @@ def plan_path() -> Path:
 _PLAN_FIELDS = (
     "corpora", "adapters", "scorers",
     "output_dir", "ns3_yaml", "delta_frames",
+    "keep_fk_artifacts",
 )
 
 
@@ -60,6 +61,12 @@ class Plan:
     output_dir:    str            = "runs/latest"
     ns3_yaml:      Optional[str]  = None
     delta_frames:  Optional[int]  = None   # for the pairwise scorer
+    # When true, the fiber-kit adapter places its per-sort session dir
+    # (.fil, .yaml, .res.standard.<g>, .spk.standard.<g>, fiber-kit.yaml,
+    # every stage log, every .clu/.clc/.clp/.deconv it writes) under
+    # <output_dir>/fiber_kit/<item_slug>/ and never deletes it.  Default
+    # false — sorts go to a tmp dir that is cleaned up on success.
+    keep_fk_artifacts: bool       = False
 
     # ─── load / save ────────────────────────────────────────────────────────
     @classmethod
@@ -124,4 +131,5 @@ class Plan:
             lines.append(f"ns3_yaml  : {self.ns3_yaml}")
         if self.delta_frames is not None:
             lines.append(f"delta_frames: {self.delta_frames}")
+        lines.append(f"keep_fk_artifacts: {self.keep_fk_artifacts}")
         return "\n".join(lines)

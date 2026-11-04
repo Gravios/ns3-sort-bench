@@ -13,12 +13,19 @@ from .._util import eprint, split_csv, table
 
 
 def _load_scores(run_dir: Path):
-    """Return the scores DataFrame or raise FileNotFoundError."""
+    """Return the scores DataFrame or raise FileNotFoundError.
+
+    Reads with `keep_default_na=False` and a narrow `na_values` set so a
+    row whose `corpus_item` happens to be the literal string "None" (or an
+    adapter name of "NA", etc.) is NOT silently coerced to NaN — pandas's
+    default `na_values` list is surprisingly wide and takes out legitimate
+    identifier strings.  Empty cells are still NaN.
+    """
     import pandas as pd
     p = Path(run_dir) / "scores.csv"
     if not p.exists():
         raise FileNotFoundError(f"no scores.csv in {run_dir}")
-    df = pd.read_csv(p)
+    df = pd.read_csv(p, keep_default_na=False, na_values=[""])
     return df
 
 

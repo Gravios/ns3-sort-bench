@@ -76,6 +76,27 @@ def cmd_set_delta(args) -> int:
     return 0
 
 
+def _parse_bool(s: str) -> Optional[bool]:
+    v = s.strip().lower()
+    if v in ("1", "true", "yes", "on"):   return True
+    if v in ("0", "false", "no", "off"):  return False
+    return None
+
+
+def cmd_set_keep_fk_artifacts(args) -> int:
+    val = _parse_bool(args.value)
+    if val is None:
+        eprint(f"keep-fk-artifacts expects true|false, got {args.value!r}")
+        return 1
+    plan = Plan.load()
+    plan.keep_fk_artifacts = val
+    plan.save()
+    print(f"keep_fk_artifacts = {plan.keep_fk_artifacts}")
+    if val:
+        print(f"  → fiber-kit sessions will land under {plan.output_dir}/fiber_kit/<corpus_item>/")
+    return 0
+
+
 # ─── show / reset ───────────────────────────────────────────────────────────
 def cmd_show(args) -> int:
     plan = Plan.load()
@@ -107,16 +128,19 @@ def register(subparsers) -> None:
     st_sub = st.add_subparsers(dest="set_what", required=True)
 
     for key, fn, help_ in (
-        ("adapters",     cmd_set_adapters,
+        ("adapters",          cmd_set_adapters,
          "comma-separated adapter names (empty → auto: all available)"),
-        ("scorers",      cmd_set_scorers,
+        ("scorers",           cmd_set_scorers,
          "comma-separated scorer names (empty → pairwise,per_cell,propper_overlap)"),
-        ("output",       cmd_set_output,
+        ("output",            cmd_set_output,
          "output directory"),
-        ("yaml",         cmd_set_yaml,
+        ("yaml",              cmd_set_yaml,
          "path to the ns3 session yaml for Contract validation (empty → clear)"),
-        ("delta-frames", cmd_set_delta,
+        ("delta-frames",      cmd_set_delta,
          "pairwise-scorer spike-match tolerance in samples (int)"),
+        ("keep-fk-artifacts", cmd_set_keep_fk_artifacts,
+         "true|false — keep fiber-kit per-sort workspace under "
+         "<output_dir>/fiber_kit/<item>/ instead of cleaning up a tmp dir"),
     ):
         sp = st_sub.add_parser(key, help=help_)
         sp.add_argument("value", help=help_)
