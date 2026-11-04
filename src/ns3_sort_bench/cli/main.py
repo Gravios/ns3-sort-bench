@@ -6,6 +6,7 @@ import sys
 
 from .commands import (
     contract_cmd,
+    curate_cmd,
     inspect_cmd,
     list_cmd,
     misc_cmd,
@@ -44,6 +45,10 @@ examples:
   ns3sb compare runs/baseline runs/candidate --only-regressed
   ns3sb compare runs/baseline runs/candidate --metric accuracy,f1
 
+  # measure Klusters curation effort between a sorter output and a curated one
+  ns3sb curate-diff fiber_kit.clu.standard.1 fiber_kit.clu.standard.1.curated
+  ns3sb curate-diff fiber_kit.clu.standard.1 fiber_kit.clu.standard.1.curated --format csv
+
   # your own data (CA1 lab session + curated GT)
   ns3sb load lab:/data/g7_session.yaml
   ns3sb load lab:/data/g6_0316.yaml:6:stderiv_C5_D34:exp_final
@@ -74,6 +79,8 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd.register(sub)
     # Review of previous runs
     review_cmd.register(sub)
+    # Curation-effort diff (Klusters .clu + .cur comparison)
+    curate_cmd.register(sub)
     misc_cmd.register_lattice(sub)
     misc_cmd.register_render(sub)
     misc_cmd.register_doctor(sub)
