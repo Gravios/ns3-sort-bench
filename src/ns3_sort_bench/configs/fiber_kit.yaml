@@ -18,10 +18,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 ndm_detect:
-  # threshold = thresholdFactor × baseline_noise, where baseline_noise is
-  # 4 × median(|x|) / 0.6745 (Quiroga et al. 2004).  0.8 ≈ 3.2σ on standard,
-  # the historical CA1 setting.
-  thresholdFactor:   "0.8"
+  # threshold = thresholdFactor × baseline, where baseline = 4 × median(|x|)/0.6745
+  # (Quiroga et al. 2004).  Since median(|x|) ≈ 0.6745·σ for Gaussian noise,
+  # baseline ≈ 4σ, so thresholdFactor is effectively a (× 4σ) multiplier:
+  #
+  #     thresholdFactor   effective σ
+  #        0.8               3.2        << old ns3sb default — floods fiber-session
+  #                                        with near-noise detections, collapses
+  #                                        clustering to 1 lump (observed on
+  #                                        PAIRED_CRCNS_HC1: 2,895 detections → 1 unit)
+  #        1.25              5.0        << matches the Python port's prior behaviour
+  #                                        (_DEFAULT_THRESHOLD_SIGMA = 5.0), which
+  #                                        is what fiber-session's clustering was
+  #                                        tuned against on CA1 paired recordings
+  #        1.5               6.0        << ndm_detectspikes.xml's own default
+  #
+  # Keep at 1.25 unless you are deliberately re-tuning detection; drop it only
+  # on recordings where real spikes genuinely sit between 3σ and 5σ.
+  thresholdFactor:   "1.25"
   refractoryPeriod:  "16"      # samples
   peakSearchLength:  "16"      # samples
   start:             "0"       # noise-window start (s)
