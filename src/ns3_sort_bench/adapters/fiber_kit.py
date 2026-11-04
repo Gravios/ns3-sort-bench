@@ -2,7 +2,20 @@
 
 Three modes registered: fiber_kit (full chain), fiber_kit_no_deconv,
 fiber_kit_session.  All share the same Contract shape; only the
-`_mode` + env override differ."""
+`_mode` + env override differ.
+
+For a lab session, `fiber-session` reads a pre-existing `.res.<group>`
+(and `.spk.<group>`) produced by `ndm_extractspikes`.  For a SpikeInterface
+BaseRecording that comes in from a corpus loader (SpikeForest paired data,
+the Propper simulator, etc.), nothing has produced those files yet, so the
+adapter must detect spikes and write the Klusters-convention
+`.res.<group>` + `.spk.<group>` ahead of the fiber-session chain.
+
+Shared-detection mode: pass `shared_detection=True` as a sort kwarg and the
+adapter writes the ground_truth_res sample indices as the `.res.<group>`
+instead of detecting.  Useful for paired recordings — it isolates fiber-kit's
+*clustering* quality from its detection quality.
+"""
 from __future__ import annotations
 
 import os
@@ -19,6 +32,108 @@ from .._base import (
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+# ─── Klusters-convention spike detection ─────────────────────────────────────
+# Written here (rather than in a shared module) because this is the only
+# caller.  Self-contained: only depends on scipy, which is a core dep.
+
+_NS_SAMPLES = 32          # Klusters snippet length
+_NS_PEAK    = 16          # offset of peak sample within the snippet
+_DEFAULT_THRESHOLD_SIGMA = 5.0
+_DEFAULT_DEAD_TIME_MS    = 0.5
+_BAND_HZ = (300.0, 6000.0)
+
+
+def _bandpass(traces: np.ndarray, sr: float,
+              low: float = _BAND_HZ[0], high: float = _BAND_HZ[1]) -> np.ndarray:
+    """4th-order Butterworth bandpass along axis 0.  Returns float64."""
+    from scipy.signal import iirfilter, sosfiltfilt
+    nyq = 0.5 * float(sr)
+    high_eff = min(float(high), 0.99 * nyq)
+    sos = iirfilter(N=4, Wn=[float(low), high_eff], btype="bandpass",
+                    ftype="butter", fs=float(sr), output="sos")
+    return sosfiltfilt(sos, np.asarray(traces, dtype=np.float64), axis=0)
+
+
+def _detect_peak_indices(traces_filt: np.ndarray, sr: float,
+                          threshold_sigma: float = _DEFAULT_THRESHOLD_SIGMA,
+                          dead_time_ms: float = _DEFAULT_DEAD_TIME_MS
+                          ) -> np.ndarray:
+    """MAD-threshold peak detector on the negative-going cross-channel envelope.
+    Returns a 1-D int64 array of sample indices, sorted ascending."""
+    from scipy.signal import find_peaks
+    neg = -traces_filt                               # positive peaks ↔ negative spikes
+    env = neg.max(axis=1)                             # cross-channel envelope
+    # Per-channel noise, then take the median across channels for a robust floor.
+    mad_per_ch = np.median(np.abs(traces_filt - np.median(traces_filt, axis=0)), axis=0)
+    noise_sigma = 1.4826 * float(np.median(mad_per_ch))
+    threshold = float(threshold_sigma) * max(noise_sigma, 1e-6)
+    dead = max(int(round(1e-3 * dead_time_ms * sr)), 1)
+    idx, _ = find_peaks(env, height=threshold, distance=dead)
+    return np.asarray(idx, dtype=np.int64)
+
+
+def _extract_snippets(traces_filt: np.ndarray, peaks: np.ndarray,
+                       n_samples: int = _NS_SAMPLES,
+                       peak_sample: int = _NS_PEAK) -> np.ndarray:
+    """Slice `(n_spikes, n_samples, n_ch)` int16 snippets around each peak.
+    Peaks too close to either end are dropped and their indices are returned
+    too, so the caller can match .res to .spk 1-to-1."""
+    n_total, n_ch = traces_filt.shape
+    before = peak_sample
+    after = n_samples - peak_sample
+    ok = (peaks >= before) & (peaks + after <= n_total)
+    kept = peaks[ok]
+    out = np.empty((kept.size, n_samples, n_ch), dtype=np.int16)
+    for i, p in enumerate(kept):
+        s0 = int(p) - before
+        s1 = s0 + n_samples
+        out[i] = np.clip(np.rint(traces_filt[s0:s1]), -32768, 32767).astype(np.int16)
+    return kept, out
+
+
+def _write_res(path: str, peak_samples: np.ndarray) -> None:
+    """One sample index per line, 0-indexed, ASCII — Klusters convention."""
+    with open(path, "w") as f:
+        f.writelines(f"{int(s)}\n" for s in sorted(peak_samples))
+
+
+def _write_spk(path: str, snippets_i16: np.ndarray) -> None:
+    """Raw int16 binary, C-order, shape (n_spikes, n_samples, n_ch)."""
+    snippets_i16.astype(np.int16, copy=False).tofile(path)
+
+
+def detect_and_write_klusters(recording, base: str, group: int,
+                                *, threshold_sigma: float = _DEFAULT_THRESHOLD_SIGMA,
+                                dead_time_ms: float = _DEFAULT_DEAD_TIME_MS,
+                                n_samples: int = _NS_SAMPLES,
+                                peak_sample: int = _NS_PEAK,
+                                shared_res: Optional[np.ndarray] = None,
+                                ) -> int:
+    """Produce `<base>.res.<group>` + `<base>.spk.<group>` from a
+    SpikeInterface BaseRecording.  Returns the number of spikes written.
+
+    When `shared_res` is provided (a 1-D int array of sample indices), those
+    are used as the detections instead of running the MAD detector.
+    Snippets are still extracted from the filtered trace so fiber-session
+    has `.spk` to work with.
+    """
+    # Load traces (bytes are small for paired tetrode items; chunk later if needed).
+    n_samp = int(recording.get_num_samples(0))
+    traces = recording.get_traces(start_frame=0, end_frame=n_samp)
+    sr = float(recording.get_sampling_frequency())
+    traces_f = _bandpass(traces, sr)
+    if shared_res is None:
+        peaks = _detect_peak_indices(traces_f, sr, threshold_sigma, dead_time_ms)
+    else:
+        peaks = np.asarray(shared_res, dtype=np.int64)
+    kept, snippets = _extract_snippets(traces_f, peaks,
+                                        n_samples=n_samples,
+                                        peak_sample=peak_sample)
+    _write_res(f"{base}.res.{group}", kept)
+    _write_spk(f"{base}.spk.{group}", snippets)
+    return int(kept.size)
 
 
 def _contract_for(mode: str, with_deconv: bool) -> Contract:
@@ -63,6 +178,10 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
             "Deconv ON requires fiber-kit >= 0.57.6 for the FK_SESSION_DECONV env flag.",
             "Variant/tag names must match the stage output you want "
             "(default: stderiv_C5_D34 / exp_final).",
+            "fiber-session needs a pre-existing .res.<group> + .spk.<group>; "
+            "the adapter detects and writes them for a from-scratch SpikeInterface "
+            "recording.  Override with shared_detection=True to reuse the GT's "
+            "spike samples as the detections.",
         ),
         notes="Subject of the benchmark; three modes registered as fiber_kit, "
               "fiber_kit_no_deconv, fiber_kit_session.",
@@ -111,14 +230,40 @@ class _FiberKitBase(SorterAdapter):
         if not isinstance(recording, BaseRecording):
             raise TypeError("fiber_kit adapter needs a SpikeInterface BaseRecording")
 
+        env = {**os.environ, **self._env_overrides, **kwargs.get("env", {})}
+        group = int(kwargs.get("electrode_group", 1))
+
         sess_base = recording.get_annotation("session_base", None)
         tmp_dir = None
         if sess_base is None:
             tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
             sess_base = self._materialise_recording(recording, tmp_dir)
-
-        env = {**os.environ, **self._env_overrides, **kwargs.get("env", {})}
-        group = int(kwargs.get("electrode_group", 1))
+            # fiber-session expects a Klusters-convention .res + .spk alongside
+            # the .fil / .yaml we just wrote.  Detect and emit them now,
+            # or (if the caller asked for shared detection with the GT)
+            # project ground_truth_res sample indices as the .res.
+            shared_res = None
+            if kwargs.get("shared_detection", False):
+                if ground_truth_res is None:
+                    raise ValueError(
+                        "fiber_kit adapter: shared_detection=True requires "
+                        "ground_truth_res (the GT's spike sample indices)."
+                    )
+                shared_res = np.asarray(ground_truth_res, dtype=np.int64)
+            n_detected = detect_and_write_klusters(
+                recording, sess_base, group,
+                threshold_sigma=float(kwargs.get("detect_threshold_sigma",
+                                                  _DEFAULT_THRESHOLD_SIGMA)),
+                dead_time_ms=float(kwargs.get("detect_dead_time_ms",
+                                               _DEFAULT_DEAD_TIME_MS)),
+                shared_res=shared_res,
+            )
+            if n_detected == 0:
+                raise RuntimeError(
+                    f"fiber_kit adapter: detection produced 0 spikes for "
+                    f"group {group} of {sess_base}.  Try lowering "
+                    "detect_threshold_sigma (default 5.0)."
+                )
 
         with measure_runtime() as rt:
             for stage in self._MODE_STAGES[self._mode]:
