@@ -389,6 +389,85 @@ def test_materialise_recording_writes_dat_hardlinked_to_fil(tmp_path):
     assert fil.stat().st_size % (4 * 2) == 0
 
 
+def test_materialise_recording_bandpasses_before_writing_fil(tmp_path):
+    """`.fil` must be the 300-6000 Hz bandpass of the input, NOT the raw
+    SpikeInterface traces.  Matches ndm_hipass → ndm_detectspikes flow:
+    the detector reads whatever is in .fil and assumes it is already
+    hipassed, so the adapter has to bake that in.
+
+    Regression for the paired-recordings cluster collapse: without this
+    filter, ndm_detectspikes threshold-crosses on wideband including LFP,
+    inflates detection count, and drowns fiber-session's clustering.
+    """
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    adapter = _FiberKitBase.__new__(_FiberKitBase)
+    sr = 20000.0
+    n_samp = 20_000                                  # 1 s
+    rng = np.random.default_rng(0)
+    # Pure low-frequency sine (10 Hz) deep in the stop band — a correct
+    # 300 Hz hipass should knock it to near-zero.
+    t = np.arange(n_samp) / sr
+    lf = (3000 * np.sin(2 * np.pi * 10 * t)).astype(np.int16)
+    traces = np.tile(lf[:, None], (1, 4))
+    rec = _FakeRec(traces, sr)
+    base = adapter._materialise_recording(rec, str(tmp_path))
+
+    filt = np.fromfile(base + ".fil", dtype=np.int16).reshape(-1, 4)
+    assert filt.shape == (n_samp, 4)
+    # After a 300 Hz hipass, a 10 Hz sine of amplitude 3000 collapses to
+    # a handful of counts (tolerance for filter transient edges).  Raw
+    # (no filter) would stay near +/- 3000.
+    assert np.max(np.abs(filt)) < 500, \
+        f".fil peak = {np.max(np.abs(filt))}; bandpass did not run"
+
+
+def test_materialise_recording_programs_block_follows_sample_rate(tmp_path):
+    """refractoryPeriod and peakSearchLength in the programs block must
+    track the session's sampling rate — a 10-sample refractory at 20 kHz
+    (= 0.5 ms, Python-port default) and 16 samples at 32 kHz.
+    """
+    import yaml
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase, _NS_SAMPLES
+    adapter = _FiberKitBase.__new__(_FiberKitBase)
+
+    def _read_detect_params(sr):
+        d = tmp_path / f"sr{int(sr)}"
+        d.mkdir()
+        rec = _FakeRec(np.zeros((int(sr * 2), 4), dtype=np.int16), float(sr))
+        base = adapter._materialise_recording(rec, str(d))
+        doc = yaml.safe_load(Path(base + ".yaml").read_text())
+        progs = {p["name"]: {kv["name"]: kv["value"] for kv in p["parameters"]}
+                 for p in doc["programs"]}
+        return progs["ndm_detectspikes"]
+
+    p20 = _read_detect_params(20_000.0)
+    assert p20["refractoryPeriod"] == str(max(1, int(round(0.5e-3 * 20_000))))
+    assert p20["peakSearchLength"] == str(_NS_SAMPLES)
+
+    p32 = _read_detect_params(32_000.0)
+    assert p32["refractoryPeriod"] == str(max(1, int(round(0.5e-3 * 32_000))))
+
+    # The yaml-level baseline also stays sane (thresholdFactor, start,
+    # method are NOT rewritten and keep the configs/fiber_kit.yaml value).
+    assert p20["thresholdFactor"] == "1.25"
+    assert p20["method"]          == "standard"
+
+
+def test_fiber_kit_config_sets_pca_to_python_port_shape():
+    """`configs/fiber_kit.yaml` must disable varimax + extras for ndm_pca so
+    the feature space matches the previous Python port's _compute_features
+    (plain per-channel PCA, 3 components, no peak-value extras, no rotation).
+    fiber-session's clustering has been tuned against that shape.
+    """
+    from ns3_sort_bench.configs import load_adapter_config
+    cfg = load_adapter_config("fiber_kit")
+    pca = cfg["ndm_pca"]
+    assert pca["extra"]   == "false", \
+        "ndm_pca must not add peak-value extras (Python port had none)"
+    assert pca["varimax"] == "false", \
+        "ndm_pca must not apply varimax (Python port used plain PCA)"
+
+
 # ─── fiber-kit.yaml setup ───────────────────────────────────────────────────
 def test_write_fk_config_pins_realign_off(tmp_path):
     """The auto-written fiber-kit.yaml must set FK_SESSION_REALIGN=off, with

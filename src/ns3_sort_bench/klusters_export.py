@@ -32,7 +32,8 @@ from ._base import Corpus, SortedResult
 from .adapters.fiber_kit import (
     _klusters_path, _slugify,
     _NS3_METHOD, _NS_SAMPLES, _NS_PEAK,
-    _RES_DTYPE, _programs_yaml_section, _run_ndm,
+    _RES_DTYPE, _programs_yaml_section, _run_ndm, _bandpass,
+    _NDM_DETECT_DEFAULTS,
 )
 
 _CLU_DTYPE = np.dtype("<i4")
@@ -82,7 +83,14 @@ def _write_yaml_with_programs(path: str, *, n_ch: int, sr: float,
                                 peak_sample: int = _NS_PEAK,
                                 n_features: int = 3,
                                 noise_duration_s: float = 10.0) -> None:
+    """Session yaml with a `programs:` block whose rate-dependent knobs
+    are rewritten for ``sr`` — mirrors adapters/fiber_kit.py's
+    ``_materialise_recording``, so an exported session matches a
+    sort-time session byte-for-byte on the ndm params that depend on
+    the recording."""
     import yaml
+    refractory_samples  = max(1, int(round(0.5e-3 * float(sr))))    # 0.5 ms
+    peak_search_samples = int(n_samples)                             # snippet width
     with open(path, "w") as f:
         yaml.safe_dump({
             "parameters": {"version": "1.0",
@@ -99,7 +107,11 @@ def _write_yaml_with_programs(path: str, *, n_ch: int, sr: float,
                 nFeatures=int(n_features),
             )]},
             "programs": _programs_yaml_section(overrides={
-                "ndm_detectspikes": {"duration": f"{noise_duration_s:g}"},
+                "ndm_detectspikes": {
+                    "refractoryPeriod":  str(refractory_samples),
+                    "peakSearchLength":  str(peak_search_samples),
+                    "duration":          f"{noise_duration_s:g}",
+                },
             }),
         }, f, sort_keys=False)
 
@@ -112,6 +124,11 @@ def _materialise_shared_files(recording, base: str,
     already there.  `.dat` is a hardlink to `.fil` — Klusters' TracesProvider
     is hardcoded to open `<base>.dat` (src/klusters/src/klustersdoc.cpp:745)
     while fiber-session reads `.fil`.  Same bytes, no duplicate on disk.
+
+    The traces are bandpass-filtered 300-6000 Hz before being written, so
+    the exported .fil matches what ndm_detectspikes expects (a hipassed
+    signal) and reproduces adapters/fiber_kit.py's _materialise_recording
+    byte-for-byte.
     """
     fil_path = base + ".fil"
     dat_path = base + ".dat"
@@ -123,9 +140,11 @@ def _materialise_shared_files(recording, base: str,
     n_ch = int(recording.get_num_channels())
     sr = float(recording.get_sampling_frequency())
     traces = recording.get_traces(start_frame=0, end_frame=n_samp)
-    np.clip(np.rint(traces), -32768, 32767).astype(np.int16).tofile(fil_path)
+    traces_filt = _bandpass(np.asarray(traces, np.float64), sr)
+    np.clip(np.rint(traces_filt), -32768, 32767).astype(np.int16).tofile(fil_path)
     _link_or_copy(fil_path, dat_path)
-    noise_s = min(10.0, (n_samp / sr) * 0.5)
+    noise_s = min(float(_NDM_DETECT_DEFAULTS.get("duration", "10")),
+                   (n_samp / sr) * 0.5)
     _write_yaml_with_programs(
         yaml_path, n_ch=n_ch, sr=sr,
         n_samples=n_samples, peak_sample=peak_sample,

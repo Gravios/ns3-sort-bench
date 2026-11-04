@@ -23,21 +23,27 @@ ndm_detect:
   # baseline ≈ 4σ, so thresholdFactor is effectively a (× 4σ) multiplier:
   #
   #     thresholdFactor   effective σ
-  #        0.8               3.2        << old ns3sb default — floods fiber-session
-  #                                        with near-noise detections, collapses
-  #                                        clustering to 1 lump (observed on
-  #                                        PAIRED_CRCNS_HC1: 2,895 detections → 1 unit)
+  #        0.8               3.2        << floods fiber-session with near-noise
+  #                                        detections (collapses to 1 cluster on CA1)
   #        1.25              5.0        << matches the Python port's prior behaviour
   #                                        (_DEFAULT_THRESHOLD_SIGMA = 5.0), which
-  #                                        is what fiber-session's clustering was
-  #                                        tuned against on CA1 paired recordings
+  #                                        fiber-session's CA1 clustering was tuned
+  #                                        against
   #        1.5               6.0        << ndm_detectspikes.xml's own default
-  #
-  # Keep at 1.25 unless you are deliberately re-tuning detection; drop it only
-  # on recordings where real spikes genuinely sit between 3σ and 5σ.
   thresholdFactor:   "1.25"
-  refractoryPeriod:  "16"      # samples
-  peakSearchLength:  "16"      # samples
+  # refractoryPeriod and peakSearchLength are in SAMPLES in the yaml, so the
+  # correct clock-time value depends on the session's sampling rate.  The
+  # adapter rewrites both at session-materialise time (see
+  # _materialise_recording in adapters/fiber_kit.py):
+  #   refractoryPeriod_samples  = round(0.5 ms × sr)        — Python's
+  #                                                           _DEFAULT_DEAD_TIME_MS
+  #   peakSearchLength_samples  = nSamples (32)             — snippet width,
+  #                                                           so the peak search
+  #                                                           sits inside the
+  #                                                           window we'll cut
+  # The numbers below are sensible defaults for 20 kHz (0.5 ms = 10 samples).
+  refractoryPeriod:  "10"
+  peakSearchLength:  "32"
   start:             "0"       # noise-window start (s)
   duration:          "10"      # noise-window length (s) — the adapter
                                 # clips to <= half the recording when the
@@ -49,6 +55,15 @@ ndm_extract:
 
 ndm_pca:
   method:            "standard"
+  # Match the previous Python port's _compute_features:
+  #   plain per-channel PCA, 3 components per channel, NO peak-amplitude
+  #   extras, NO varimax rotation.  The baseline is tuned to fiber-session,
+  #   which has been clustering against this feature shape.  ndm_pca's own
+  #   defaults (extra=true, varimax=true) give a DIFFERENT feature space
+  #   that fiber-session is not tuned against — one of the suspected
+  #   causes of the paired-recordings cluster collapse post-ndm-switch.
+  extra:             "false"
+  varimax:           "false"
 
 # FK_* overrides for fiber-session / fiber-refine / etc.  Keys are the
 # same FK_<STAGE>_<KNOB> the stages read via fiber_kit/config.py.

@@ -725,43 +725,77 @@ class _FiberKitBase(SorterAdapter):
 
     def _materialise_recording(self, recording, tmp_dir: str) -> str:
         """Write `<base>.fil` + `<base>.yaml` for a from-scratch SpikeInterface
-        recording.  The yaml carries both the session description that every
-        ns3 reader needs (`acquisitionSystem`, `spikeDetection.channelGroups`)
-        and a `programs:` block with sensible CA1 defaults for ndm_detectspikes,
-        ndm_extractspikes and ndm_pca — so a plain
-        `ndm_detectspikes <base>.yaml` works without further configuration.
+        recording.  The ``.fil`` is **bandpass-filtered 300–6000 Hz** before
+        being written — ``ndm_detectspikes`` reads whatever is in ``.fil``
+        and assumes it is already high-passed (the pipeline's split is
+        ``ndm_hipass -> .fil -> ndm_detectspikes``; our SpikeInterface
+        source has no equivalent step, so we bake the filter in here).
+
+        The session yaml carries the usual ns3 description
+        (``acquisitionSystem``, ``spikeDetection.channelGroups``) plus a
+        ``programs:`` block whose ndm_detectspikes parameters are rewritten
+        at this call to reflect the session's actual sampling rate:
+
+          * ``refractoryPeriod``  = round(0.5 ms × sr)  — the Python port's
+                                                          _DEFAULT_DEAD_TIME_MS
+          * ``peakSearchLength``  = nSamples (snippet width)
+          * ``duration``          = min(yaml default, half the recording)
+
+        The baseline values in ``configs/fiber_kit.yaml`` are sensible for
+        20 kHz; these overrides keep them correct across sampling rates.
         """
         import yaml
         n_samp = recording.get_num_samples(0)
         n_ch = recording.get_num_channels()
-        sr = recording.get_sampling_frequency()
+        sr = float(recording.get_sampling_frequency())
         base = os.path.join(tmp_dir, "sim_session")
+
+        # Bandpass 300–6000 Hz BEFORE writing .fil.  Matches the Python
+        # port's internal _bandpass(traces, sr, 300, 6000) that produced
+        # the signal fiber-session's clustering was tuned against.  Without
+        # this, ndm_detectspikes threshold-crosses on wideband including
+        # LFP sweeps, which inflates detection counts and (on CA1 paired
+        # recordings) collapses fiber-session's output to 1 cluster.
         traces = recording.get_traces(start_frame=0, end_frame=n_samp)
-        traces_i16 = np.clip(np.rint(traces), -32768, 32767).astype(np.int16)
+        traces_filt = _bandpass(np.asarray(traces, np.float64), sr)
+        traces_i16 = np.clip(np.rint(traces_filt), -32768, 32767).astype(np.int16)
         traces_i16.tofile(base + ".fil")
         # fiber-session reads `.fil`; Klusters' `TracesProvider` is hardcoded
         # to read `<base>.dat` (src/klusters/src/klustersdoc.cpp line 745).
         # Hardlink the same bytes so both open the session without a
         # duplicate copy.  A fallback copy on OSError handles cross-fs tmp.
         _hardlink_or_copy(base + ".fil", base + ".dat")
-        # If the recording is shorter than the default 10-s noise window, clip
-        # the window to the recording duration so ndm_detectspikes doesn't
-        # error on `start + duration > samples / sr`.
-        noise_duration = min(10.0, float(n_samp) / float(sr) * 0.5)
+
+        # Session-rate-aware overrides for the detect block.  Clamp the
+        # noise window to <= half the recording so ndm_detectspikes
+        # doesn't error on short sessions.
+        noise_duration = min(
+            float(_NDM_DETECT_DEFAULTS.get("duration", "10")),
+            float(n_samp) / sr * 0.5,
+        )
+        refractory_samples  = max(1, int(round(0.5e-3 * sr)))      # 0.5 ms
+        peak_search_samples = int(_NS_SAMPLES)                     # snippet width
+
         yml = {
             "parameters": {"version": "1.0", "creator": "ns3-sort-bench"},
             "acquisitionSystem": dict(nBits=16, nChannels=int(n_ch),
                                        voltageRange=20, amplification=1000,
-                                       offset=0, samplingRate=float(sr)),
+                                       offset=0, samplingRate=sr),
             "spikeDetection": {"channelGroups": [dict(
                 channels=list(range(n_ch)),
                 nSamples=_NS_SAMPLES, peakSampleIndex=_NS_PEAK, nFeatures=3,
             )]},
             # ndm_detectspikes / ndm_extractspikes / ndm_pca read their
-            # parameters here.  Overrides are per-adapter / per-call via
-            # the sort() kwargs `ndm_*_overrides` dict.
+            # parameters here.  The baseline comes from
+            # configs/fiber_kit.yaml; we override only the knobs that must
+            # follow the session (rate-dependent samples + short-session
+            # noise window).
             "programs": _programs_yaml_section(overrides={
-                "ndm_detectspikes": {"duration": str(noise_duration)},
+                "ndm_detectspikes": {
+                    "refractoryPeriod":  str(refractory_samples),
+                    "peakSearchLength":  str(peak_search_samples),
+                    "duration":          f"{noise_duration:g}",
+                },
             }),
         }
         with open(base + ".yaml", "w") as f:
