@@ -44,14 +44,34 @@ _DEFAULT_THRESHOLD_SIGMA = 5.0
 _DEFAULT_DEAD_TIME_MS    = 0.5
 _BAND_HZ = (300.0, 6000.0)
 
+# Canonical neurosuite-3 file naming (doc/ndmanager-plugins/formats/naming.md):
+#   <base>.<type>.<method>.<group>[.<suffix>]
+# where <method> is a family token from {standard, sdiff, stderiv} optionally
+# followed by _S<n> / _C<n> / _D<lag><dims>.  Our detector reads the raw .fil
+# bandpass-filtered to 300-6000 Hz and writes .spk.standard.<group> — the
+# "standard" family means raw waveform values (no spatial or temporal
+# derivative).  Legacy untagged forms (.res.<N> / .spk.<N>) are still accepted
+# by fiber-kit's Shared-type resolver as a fallback, but writing them tags
+# every downstream resolve as a legacy-fallback and locks the pipeline out of
+# the stderiv family.  See
+# doc/ndmanager-plugins/formats/{naming,res,spk}.md in neurosuite-3.
+_NS3_METHOD = "standard"
+
 # Byte-level fiber-kit file formats (from fiber_kit/neuro_io.py):
-#   .res.<g>   RES_DTYPE  = np.dtype("<i8")  binary int64 LE, no header
-#   .spk.<g>   SPK_DTYPE  = np.dtype("<i2")  binary int16 LE, no header,
-#                                             C-order (n_spikes, nsamp, nchan)
-# fiber-session's `main()` reads only .res + .spk at entry; .fet / .clu / .nst
-# are outputs or optional.
+#   .res.<method>.<g>   RES_DTYPE  = np.dtype("<i8")  binary int64 LE, no header,
+#                                                     ascending sample indices
+#   .spk.<method>.<g>   SPK_DTYPE  = np.dtype("<i2")  binary int16 LE, no header,
+#                                                     sample-major, C-order
+#                                                     (n_spikes, nsamp, nchan)
+# fiber-session's `main()` reads .res + .spk at entry; .fet / .clu / .nst are
+# outputs or optional.
 _RES_DTYPE = np.dtype("<i8")
 _SPK_DTYPE = np.dtype("<i2")
+
+
+def _klusters_path(base: str, type_: str, group: int, method: str = _NS3_METHOD) -> str:
+    """Canonical ns3 path: `<base>.<type>.<method>.<group>`."""
+    return f"{base}.{type_}.{method}.{group}"
 
 
 def _bandpass(traces: np.ndarray, sr: float,
@@ -158,8 +178,8 @@ def detect_and_write_klusters(recording, base: str, group: int,
     kept, snippets = _extract_snippets(traces_f, peaks,
                                         n_samples=n_samples,
                                         peak_sample=peak_sample)
-    _write_res(f"{base}.res.{group}", kept)
-    _write_spk(f"{base}.spk.{group}", snippets)
+    _write_res(_klusters_path(base, "res", group), kept)
+    _write_spk(_klusters_path(base, "spk", group), snippets)
     return int(kept.size)
 
 
@@ -205,10 +225,26 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
             "Deconv ON requires fiber-kit >= 0.57.6 for the FK_SESSION_DECONV env flag.",
             "Variant/tag names must match the stage output you want "
             "(default: stderiv_C5_D34 / exp_final).",
-            "fiber-session needs a pre-existing .res.<group> + .spk.<group>; "
-            "the adapter detects and writes them for a from-scratch SpikeInterface "
-            "recording.  Override with shared_detection=True to reuse the GT's "
-            "spike samples as the detections.",
+            "fiber-session reads <base>.res.<method>.<group> + .spk.<method>.<group> "
+            "at entry.  For a from-scratch SpikeInterface recording the adapter "
+            "runs a Python port of ndm_extractspikes (300-6000 Hz bandpass, "
+            "MAD-threshold detection, nSamples×nChannels waveform extraction) "
+            "and writes them under ns3's canonical naming "
+            "`.res.standard.<g>` / `.spk.standard.<g>` (doc/ndmanager-plugins/"
+            "formats/naming.md).  --method standard is injected into every "
+            "pipeline stage so resolves stay in the raw-waveform family; the "
+            "readback expects variant=`standard` and tag=`fiber_session` "
+            "(session-only mode) or `fiber_session_linked` (full chain).",
+            "fiber-kit.yaml setup: pass fk_config_path=<path> or set "
+            "$FK_CONFIG to point at your own tuning yaml.  When neither is set, "
+            "the adapter writes a minimal `fiber-kit.yaml` next to the session "
+            "in the tmp dir pinning FK_SESSION_REALIGN=off (the end-of-run "
+            "realign would otherwise ask for .spk.stderiv.<g> and refuse to "
+            "operate on our raw waveforms).  Precedence: explicit flag > env "
+            "FK_* > this file > session yaml > built-in default.",
+            "shared_detection=True reuses the GT's spike samples as the .res "
+            "for paired-recordings benchmarks — isolates fiber-kit's clustering "
+            "quality from its detection quality.  Requires ground_truth_res.",
         ),
         notes="Subject of the benchmark; three modes registered as fiber_kit, "
               "fiber_kit_no_deconv, fiber_kit_session.",
@@ -247,6 +283,40 @@ class _FiberKitBase(SorterAdapter):
         "fiber_kit_session": ["fiber-session"],
     }
 
+    # Default `.clu.<variant>.<group>.<tag>` tag written by the LAST stage of
+    # each mode's chain.  fiber-session writes `fiber_session`; fiber-link
+    # suffixes `_linked`; so the end-of-chain product is one of these.
+    _MODE_FINAL_TAG = {
+        "fiber_kit":            "fiber_session_linked",
+        "fiber_kit_no_deconv":  "fiber_session_linked",
+        "fiber_kit_session":    "fiber_session",
+    }
+
+    @staticmethod
+    def _write_fk_config(tmp_dir: str) -> str:
+        """Write a minimal `fiber-kit.yaml` into the session's tmp dir and
+        return its path.  Overrides that matter for a from-scratch
+        SpikeInterface recording (no stderiv variant available):
+
+          * FK_SESSION_REALIGN: "off"   — the end-of-run realign refuses to
+                                           work on raw waveforms when its token
+                                           asks for stderiv; we have no
+                                           .spk.stderiv.<g>, so disable it.
+
+        The quoted form is deliberate: YAML 1.1 parses bare `off` as a boolean,
+        which fiber-kit's config loader then rejects as the wrong type.
+        """
+        path = os.path.join(tmp_dir, "fiber-kit.yaml")
+        with open(path, "w") as f:
+            f.write(
+                "# Written by ns3_sort_bench.adapters.fiber_kit when it "
+                "materialised\n"
+                "# this session from a SpikeInterface BaseRecording.  Keep the\n"
+                "# quoted `off` strings — YAML 1.1 reads bare off/on as bools.\n"
+                "FK_SESSION_REALIGN: \"off\"\n"
+            )
+        return path
+
     def sort(self, recording, *, ns3_yaml=None, ground_truth_res=None,
              **kwargs) -> SortedResult:
         if not self._available:
@@ -262,7 +332,9 @@ class _FiberKitBase(SorterAdapter):
 
         sess_base = recording.get_annotation("session_base", None)
         tmp_dir = None
+        materialised = False
         if sess_base is None:
+            materialised = True
             tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
             sess_base = self._materialise_recording(recording, tmp_dir)
             # fiber-session expects a Klusters-convention .res + .spk alongside
@@ -276,7 +348,7 @@ class _FiberKitBase(SorterAdapter):
                         "fiber_kit adapter: shared_detection=True requires "
                         "ground_truth_res (the GT's spike sample indices)."
                     )
-                shared_res = np.asarray(ground_truth_res, dtype=np.int64)
+                shared_res = np.asarray(ground_truth_res, dtype=_RES_DTYPE)
             n_detected = detect_and_write_klusters(
                 recording, sess_base, group,
                 threshold_sigma=float(kwargs.get("detect_threshold_sigma",
@@ -292,13 +364,40 @@ class _FiberKitBase(SorterAdapter):
                     "detect_threshold_sigma (default 5.0)."
                 )
 
+            # fiber-kit.yaml setup — explicit path wins; otherwise we write a
+            # minimal one next to the session and point FK_CONFIG at it.  This
+            # pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and makes
+            # the tuning reproducible across workstations.
+            fk_config = kwargs.get("fk_config_path") or env.get("FK_CONFIG")
+            if not fk_config:
+                fk_config = self._write_fk_config(tmp_dir)
+            env["FK_CONFIG"] = fk_config
+
+        # Inject --method standard on auto-materialised runs so every stage
+        # resolves our raw .spk.standard.<g> / .res.standard.<g> files directly
+        # (no stderiv fallback).  Lab-session usage keeps whatever --method is
+        # baked into the extra_args / env.
+        stage_args = list(kwargs.get("extra_args", []))
+        if materialised:
+            stage_args = ["--method", _NS3_METHOD, *stage_args]
+
         with measure_runtime() as rt:
             for stage in self._MODE_STAGES[self._mode]:
                 self._run_stage(stage, sess_base, group, env=env,
-                                 extra_args=kwargs.get("extra_args", []))
+                                 extra_args=stage_args)
 
-        variant = kwargs.get("variant", "stderiv_C5_D34")
-        tag = kwargs.get("tag", "exp_final")
+        # Readback defaults.  For a lab-session sort the user's full pipeline
+        # emits `stderiv_C5_D34` / `exp_final` at the end.  For an auto-
+        # materialised sort we only produced the standard-family chain, so the
+        # end-of-chain tag is mode-dependent (see _MODE_FINAL_TAG).
+        if materialised:
+            default_variant = _NS3_METHOD
+            default_tag = self._MODE_FINAL_TAG[self._mode]
+        else:
+            default_variant = "stderiv_C5_D34"
+            default_tag = "exp_final"
+        variant = kwargs.get("variant", default_variant)
+        tag = kwargs.get("tag", default_tag)
         sort_ex = NS3SortingExtractor(
             sess_base + ".yaml", electrode_group=group,
             variant=variant, tag=tag,

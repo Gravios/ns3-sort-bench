@@ -17,8 +17,10 @@ from ns3_sort_bench.adapters.fiber_kit import (
     _extract_snippets,
     _write_res,
     _write_spk,
+    _klusters_path,
     _NS_SAMPLES,
     _NS_PEAK,
+    _NS3_METHOD,
     _RES_DTYPE,
     _SPK_DTYPE,
 )
@@ -167,6 +169,16 @@ def test_write_spk_round_trips_through_fiber_kit_reshape(tmp_path):
     assert np.array_equal(out, snips)
 
 
+# ─── canonical ns3 naming contract ──────────────────────────────────────────
+def test_klusters_path_follows_ns3_naming():
+    """<base>.<type>.<method>.<group> per doc/ndmanager-plugins/formats/naming.md."""
+    assert _klusters_path("/tmp/x", "res", 1) == "/tmp/x.res.standard.1"
+    assert _klusters_path("/tmp/x", "spk", 7) == "/tmp/x.spk.standard.7"
+    assert _klusters_path("/tmp/x", "res", 1, method="stderiv") == \
+           "/tmp/x.res.stderiv.1"
+    assert _NS3_METHOD == "standard"
+
+
 # ─── end-to-end .res + .spk writer ──────────────────────────────────────────
 def test_detect_and_write_klusters_files_and_shapes(tmp_path):
     tr, truth, sr = _synth_tetrode(n_samp=20000 * 3, spike_hz=40.0, seed=2)
@@ -174,9 +186,14 @@ def test_detect_and_write_klusters_files_and_shapes(tmp_path):
     base = str(tmp_path / "session")
     n_detected = detect_and_write_klusters(rec, base=base, group=1)
 
-    res_path = Path(f"{base}.res.1")
-    spk_path = Path(f"{base}.spk.1")
+    # Canonical paths — NOT the legacy untagged `.res.1` / `.spk.1`.
+    res_path = Path(f"{base}.res.standard.1")
+    spk_path = Path(f"{base}.spk.standard.1")
     assert res_path.exists() and spk_path.exists()
+    # And the legacy untagged names must NOT be written (they would mask the
+    # canonical ones under fiber-kit's Shared-type resolver).
+    assert not Path(f"{base}.res.1").exists()
+    assert not Path(f"{base}.spk.1").exists()
 
     # .res: binary int64 LE, ascending, 0-indexed, exact byte count
     assert res_path.stat().st_size == n_detected * 8
@@ -197,8 +214,8 @@ def test_res_and_spk_counts_agree(tmp_path):
     rec = _FakeRec(tr, sr)
     base = str(tmp_path / "session")
     n = detect_and_write_klusters(rec, base=base, group=3)
-    n_from_res = Path(f"{base}.res.3").stat().st_size // 8
-    n_from_spk = Path(f"{base}.spk.3").stat().st_size // (_NS_SAMPLES * tr.shape[1] * 2)
+    n_from_res = Path(f"{base}.res.standard.3").stat().st_size // 8
+    n_from_spk = Path(f"{base}.spk.standard.3").stat().st_size // (_NS_SAMPLES * tr.shape[1] * 2)
     assert n_from_res == n_from_spk == n
 
 
@@ -213,7 +230,7 @@ def test_shared_detection_uses_ground_truth_res(tmp_path):
     base = str(tmp_path / "session")
     n_written = detect_and_write_klusters(rec, base=base, group=2,
                                            shared_res=safe)
-    on_disk = np.fromfile(f"{base}.res.2", dtype="<i8").tolist()
+    on_disk = np.fromfile(f"{base}.res.standard.2", dtype="<i8").tolist()
     assert on_disk == sorted(safe.tolist())
     assert n_written == safe.size
 
@@ -227,5 +244,22 @@ def test_detect_and_write_zero_spikes_returns_zero(tmp_path):
                                    threshold_sigma=15.0)
     assert n < 20
     # Files are still written (possibly empty .res, correspondingly sized .spk)
-    assert Path(f"{base}.res.1").exists()
-    assert Path(f"{base}.spk.1").exists()
+    assert Path(f"{base}.res.standard.1").exists()
+    assert Path(f"{base}.spk.standard.1").exists()
+
+
+# ─── fiber-kit.yaml setup ───────────────────────────────────────────────────
+def test_write_fk_config_pins_realign_off(tmp_path):
+    """The auto-written fiber-kit.yaml must set FK_SESSION_REALIGN=off, with
+    `off` quoted so YAML 1.1 doesn't coerce it to a boolean."""
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    path = _FiberKitBase._write_fk_config(str(tmp_path))
+    assert Path(path).name == "fiber-kit.yaml"
+    body = Path(path).read_text()
+    assert 'FK_SESSION_REALIGN: "off"' in body
+    # Quoted — a bare `off` would YAML-coerce to False
+    assert "FK_SESSION_REALIGN: off\n" not in body
+    # Round-trip under PyYAML to confirm the string survives
+    import yaml
+    parsed = yaml.safe_load(body)
+    assert parsed["FK_SESSION_REALIGN"] == "off"
