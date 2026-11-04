@@ -84,6 +84,19 @@ def _klusters_path(base: str, type_: str, group: int, method: str = _NS3_METHOD)
     return f"{base}.{type_}.{method}.{group}"
 
 
+def _hardlink_or_copy(src: str, dst: str) -> None:
+    """Hardlink `src` → `dst` (zero disk cost); fall back to a copy on cross-fs
+    or any other OSError.  No-op when `dst` already exists.
+    """
+    if os.path.exists(dst):
+        return
+    try:
+        os.link(src, dst)
+    except OSError:
+        import shutil
+        shutil.copy2(src, dst)
+
+
 _SLUG_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+")
 
 
@@ -642,6 +655,11 @@ class _FiberKitBase(SorterAdapter):
         traces = recording.get_traces(start_frame=0, end_frame=n_samp)
         traces_i16 = np.clip(np.rint(traces), -32768, 32767).astype(np.int16)
         traces_i16.tofile(base + ".fil")
+        # fiber-session reads `.fil`; Klusters' `TracesProvider` is hardcoded
+        # to read `<base>.dat` (src/klusters/src/klustersdoc.cpp line 745).
+        # Hardlink the same bytes so both open the session without a
+        # duplicate copy.  A fallback copy on OSError handles cross-fs tmp.
+        _hardlink_or_copy(base + ".fil", base + ".dat")
         # If the recording is shorter than the default 10-s noise window, clip
         # the window to the recording duration so ndm_detectspikes doesn't
         # error on `start + duration > samples / sr`.

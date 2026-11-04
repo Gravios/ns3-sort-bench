@@ -367,6 +367,28 @@ def test_write_fet_byte_layout(tmp_path):
 # spike path is similarly ndm_detectspikes' responsibility now.)
 
 
+# ─── materialise .fil + .dat for Klusters ───────────────────────────────────
+def test_materialise_recording_writes_dat_hardlinked_to_fil(tmp_path):
+    """Klusters' TracesProvider opens <base>.dat (hardcoded, not .fil).
+    `_materialise_recording` must leave both next to the yaml with
+    identical bytes."""
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    adapter = _FiberKitBase.__new__(_FiberKitBase)
+    rec = _FakeRec(np.zeros((2000, 4), dtype=np.int16), 20000.0)
+    base = adapter._materialise_recording(rec, str(tmp_path))
+    fil = Path(base + ".fil")
+    dat = Path(base + ".dat")
+    yaml_p = Path(base + ".yaml")
+    assert fil.exists() and dat.exists() and yaml_p.exists()
+    # Same bytes — hardlink shares inode; even if we fell back to a copy
+    # the content must still match.
+    assert fil.stat().st_size == dat.stat().st_size
+    assert fil.read_bytes() == dat.read_bytes()
+    # And the file size divides evenly by (n_channels × 2 bytes) — the exact
+    # arithmetic Klusters' TracesProvider uses to compute recording length.
+    assert fil.stat().st_size % (4 * 2) == 0
+
+
 # ─── fiber-kit.yaml setup ───────────────────────────────────────────────────
 def test_write_fk_config_pins_realign_off(tmp_path):
     """The auto-written fiber-kit.yaml must set FK_SESSION_REALIGN=off, with

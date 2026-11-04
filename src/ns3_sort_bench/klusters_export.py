@@ -108,16 +108,23 @@ def _materialise_shared_files(recording, base: str,
                                 n_samples: int = _NS_SAMPLES,
                                 peak_sample: int = _NS_PEAK,
                                 n_features: int = 3) -> None:
-    """Idempotent: write `<base>.fil` + `<base>.yaml` when not already there."""
+    """Idempotent: write `<base>.fil` + `<base>.dat` + `<base>.yaml` when not
+    already there.  `.dat` is a hardlink to `.fil` — Klusters' TracesProvider
+    is hardcoded to open `<base>.dat` (src/klusters/src/klustersdoc.cpp:745)
+    while fiber-session reads `.fil`.  Same bytes, no duplicate on disk.
+    """
     fil_path = base + ".fil"
+    dat_path = base + ".dat"
     yaml_path = base + ".yaml"
-    if os.path.exists(fil_path) and os.path.exists(yaml_path):
+    if os.path.exists(fil_path) and os.path.exists(dat_path) \
+            and os.path.exists(yaml_path):
         return
     n_samp = int(recording.get_num_samples(0))
     n_ch = int(recording.get_num_channels())
     sr = float(recording.get_sampling_frequency())
     traces = recording.get_traces(start_frame=0, end_frame=n_samp)
     np.clip(np.rint(traces), -32768, 32767).astype(np.int16).tofile(fil_path)
+    _link_or_copy(fil_path, dat_path)
     noise_s = min(10.0, (n_samp / sr) * 0.5)
     _write_yaml_with_programs(
         yaml_path, n_ch=n_ch, sr=sr,
@@ -145,12 +152,19 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
     os.makedirs(sess_dir, exist_ok=True)
     base = os.path.join(sess_dir, "sim_session")
 
-    # Shared .fil + .yaml.  Hardlink from a lab session if available.
+    # Shared .fil + .dat + .yaml.  Hardlink from a lab session if available.
+    # Klusters reads <base>.dat; fiber-session reads <base>.fil.  Lab sessions
+    # may have one or the other (or both) — hardlink whichever exists into the
+    # name the consumer expects.
     recording = corpus.recording
     sess_base = recording.get_annotation("session_base", None) \
                 if hasattr(recording, "get_annotation") else None
-    if sess_base and os.path.exists(sess_base + ".fil"):
-        _link_or_copy(sess_base + ".fil", base + ".fil")
+    if sess_base and (os.path.exists(sess_base + ".fil")
+                      or os.path.exists(sess_base + ".dat")):
+        src = sess_base + ".fil" if os.path.exists(sess_base + ".fil") \
+              else sess_base + ".dat"
+        _link_or_copy(src, base + ".fil")
+        _link_or_copy(src, base + ".dat")
         if os.path.exists(sess_base + ".yaml"):
             _link_or_copy(sess_base + ".yaml", base + ".yaml")
         else:

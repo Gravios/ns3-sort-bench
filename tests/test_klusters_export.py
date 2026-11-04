@@ -108,9 +108,12 @@ def test_export_adapter_session_writes_full_quintuple(tmp_path, monkeypatch):
     assert Path(sess_dir).parent.name == "MY_CORPUS_ITEM"
     base = Path(sess_dir) / "sim_session"
 
-    # Shared files
-    assert (base.with_suffix(".fil")).exists()
-    assert (base.with_suffix(".yaml")).exists()
+    # Shared files — .fil for fiber-session, .dat for Klusters, same bytes.
+    fil = base.with_suffix(".fil")
+    dat = base.with_suffix(".dat")
+    assert fil.exists() and dat.exists() and base.with_suffix(".yaml").exists()
+    assert fil.stat().st_size == dat.stat().st_size
+    assert fil.read_bytes() == dat.read_bytes()
     # The yaml's programs section carries ndm_detectspikes + ndm_extractspikes
     # + ndm_pca blocks
     import yaml
