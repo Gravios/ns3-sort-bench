@@ -184,17 +184,45 @@ def _read_clu_file(path: str, n_spikes: Optional[int] = None):
 
 
 def _resolve_sort_pair(base: str, elec: int, variant: str = "", tag: str = ""):
+    """Resolve (`.res`, `.clu`) for one (variant, stage-tag) sort.
+
+    Per neurosuite-3's canonical naming (doc/ndmanager-plugins/formats/naming.md):
+
+      * `.clu` is **MethodSpecific** — strict `<base>.clu.<variant>.<group>[.<tag>]`.
+      * `.res` is **Shared** — one per group, shared across stages.  A stage
+        that reextracts (realign/dedup) writes a staged copy at
+        `<base>.res.<variant>.<group>.<tag>`; otherwise the shared
+        `<base>.res.<variant>.<group>` (no tag) is the one that pairs with the
+        tagged `.clu`.
+
+    Resolution: try the staged `.res` first; fall back to the shared `.res` if
+    the tagged copy isn't on disk.  Mirrors fiber-kit's own `read_res_at` /
+    `read_res` split — staged is strict, shared is a `resolve_any`.
+    """
     if HAVE_FK:
-        res = _fk_io.session_path(base, "res", elec, variant=variant, tag=tag)
         clu = _fk_io.session_path(base, "clu", elec, variant=variant, tag=tag)
+        res_staged = _fk_io.session_path(base, "res", elec, variant=variant, tag=tag)
+        res_shared = _fk_io.session_path(base, "res", elec, variant=variant)
     else:
-        pfx = base + ".{t}"
-        if variant: pfx += f".{variant}"
-        pfx += f".{elec}"
-        if tag: pfx += f".{tag}"
-        res = pfx.format(t="res"); clu = pfx.format(t="clu")
-    if not os.path.exists(res):
-        raise FileNotFoundError(res)
+        def _p(t, with_tag):
+            pfx = f"{base}.{t}"
+            if variant: pfx += f".{variant}"
+            pfx += f".{elec}"
+            if with_tag and tag: pfx += f".{tag}"
+            return pfx
+        clu = _p("clu", with_tag=True)
+        res_staged = _p("res", with_tag=True)
+        res_shared = _p("res", with_tag=False)
+
+    if os.path.exists(res_staged):
+        res = res_staged
+    elif os.path.exists(res_shared):
+        res = res_shared
+    else:
+        raise FileNotFoundError(
+            f"no .res for ({base}, group={elec}, variant={variant!r}, tag={tag!r}); "
+            f"tried staged={res_staged!r} and shared={res_shared!r}"
+        )
     if not os.path.exists(clu):
         raise FileNotFoundError(clu)
     return res, clu
