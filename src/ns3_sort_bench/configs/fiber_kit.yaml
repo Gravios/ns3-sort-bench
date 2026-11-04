@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# fiber-kit adapter tuning
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/fiber_kit.py.  Four top-level sections:
+#
+#   ndm_detect / ndm_extract / ndm_pca
+#       Parameters for the three ndm_* steps, written into the
+#       `programs:` block of the auto-generated session yaml.  Every
+#       key must be a VALID parameter name for that step (see
+#       src/ndmanager-plugins/descriptions/ndm_<step>.xml in neurosuite-3).
+#       Values are stringified at write time — YAML scalars are fine.
+#
+#   fiber_kit
+#       Flat FK_* map merged into the fiber-kit.yaml we hand fiber-session.
+#       When the user ALSO has ./fiber-kit.yaml in CWD, their keys override
+#       ours (so your personal tuning still wins over this baseline).
+#       Mirrors the shape fiber_kit/config.py::load_global_config expects.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ndm_detect:
+  # threshold = thresholdFactor × baseline_noise, where baseline_noise is
+  # 4 × median(|x|) / 0.6745 (Quiroga et al. 2004).  0.8 ≈ 3.2σ on standard,
+  # the historical CA1 setting.
+  thresholdFactor:   "0.8"
+  refractoryPeriod:  "16"      # samples
+  peakSearchLength:  "16"      # samples
+  start:             "0"       # noise-window start (s)
+  duration:          "10"      # noise-window length (s) — the adapter
+                                # clips to <= half the recording when the
+                                # session is shorter
+  method:            "standard"
+
+ndm_extract:
+  method:            "standard"
+
+ndm_pca:
+  method:            "standard"
+
+# FK_* overrides for fiber-session / fiber-refine / etc.  Keys are the
+# same FK_<STAGE>_<KNOB> the stages read via fiber_kit/config.py.
+#
+# FK_SESSION_REALIGN=off is load-bearing on from-scratch SpikeInterface
+# recordings: the end-of-run realign would otherwise ask for a
+# .spk.stderiv.<g> we haven't produced and refuse to operate on raw
+# waveforms.  Keep it quoted — bare `off` parses as a YAML 1.1 boolean
+# which fiber-kit's config loader rejects.
+fiber_kit:
+  FK_SESSION_REALIGN: "off"

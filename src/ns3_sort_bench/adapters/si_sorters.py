@@ -1,6 +1,12 @@
 """SpikeInterface-wrapped sorters: MountainSort 5, Tridesclous 2,
 SpykingCircus 2, Kilosort 4.  Each declares its own Contract so the
-runner can pre-filter corpora."""
+runner can pre-filter corpora.
+
+Per-adapter run_kwargs live in ``src/ns3_sort_bench/configs/<name>.yaml``
+(shape: ``run_kwargs: {<kw>: <value>, ...}``) and are loaded at import
+time via :func:`configs.load_adapter_config`.  Call-time overrides via
+``adapter.sort(run_kwargs={...})`` merge on top.
+"""
 from __future__ import annotations
 
 import tempfile
@@ -11,9 +17,19 @@ import numpy as np
 from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
+from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+def _run_kwargs_from_config(name: str) -> dict:
+    """``run_kwargs:`` section of ``configs/<name>.yaml`` as a dict; ``{}``
+    when the file is absent, the section is missing, or the section is
+    not a mapping.  Called once per adapter at module import."""
+    cfg = load_adapter_config(name)
+    rk = cfg.get("run_kwargs", {})
+    return dict(rk) if isinstance(rk, Mapping) else {}
 
 
 # ─── common ns3-yaml fields SI-wrapped sorters consume ───────────────────────
@@ -99,6 +115,7 @@ class MountainSort5Adapter(_SISorterBase):
     name = "mountainsort5"
     _si_name = "mountainsort5"
     _package_name = "mountainsort5"
+    _run_kwargs = _run_kwargs_from_config("mountainsort5")
     _contract = Contract(
         adapter_name="mountainsort5",
         upstream_url="https://github.com/flatironinstitute/mountainsort5",
@@ -132,6 +149,7 @@ class Tridesclous2Adapter(_SISorterBase):
     name = "tridesclous2"
     _si_name = "tridesclous2"
     _package_name = "tridesclous"
+    _run_kwargs = _run_kwargs_from_config("tridesclous2")
     _contract = Contract(
         adapter_name="tridesclous2",
         upstream_url="https://github.com/tridesclous/tridesclous",
@@ -159,6 +177,7 @@ class SpykingCircus2Adapter(_SISorterBase):
     name = "spykingcircus2"
     _si_name = "spykingcircus2"
     _package_name = "circus"
+    _run_kwargs = _run_kwargs_from_config("spykingcircus2")
     _contract = Contract(
         adapter_name="spykingcircus2",
         upstream_url="https://github.com/spyking-circus/spyking-circus",
@@ -191,8 +210,7 @@ class Kilosort4Adapter(_SISorterBase):
     name = "kilosort4"
     _si_name = "kilosort4"
     _package_name = "kilosort"
-    _run_kwargs = {"do_CAR": False, "Th_universal": 9.0, "Th_learned": 8.0,
-                   "nblocks": 0}
+    _run_kwargs = _run_kwargs_from_config("kilosort4")
     _contract = Contract(
         adapter_name="kilosort4",
         upstream_url="https://github.com/MouseLand/Kilosort",

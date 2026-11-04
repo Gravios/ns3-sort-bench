@@ -1,0 +1,11 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# MountainSort 5 (via SpikeInterface) run_kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/si_sorters.py::MountainSort5Adapter.
+# Currently empty — MountainSort 5 runs with upstream defaults.  Add
+# run_kwargs here as tuning emerges.  Shape:
+#
+#     run_kwargs:
+#       <mountainsort5-param>: <value>
+# ─────────────────────────────────────────────────────────────────────────────
+run_kwargs: {}

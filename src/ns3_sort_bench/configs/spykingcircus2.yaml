@@ -1,0 +1,8 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# SpykingCircus 2 (via SpikeInterface) run_kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/si_sorters.py::SpykingCircus2Adapter.
+# Currently empty — SpykingCircus 2 runs with upstream defaults.  Motion
+# correction can misfire on short recordings; the Contract documents this.
+# ─────────────────────────────────────────────────────────────────────────────
+run_kwargs: {}

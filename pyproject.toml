@@ -146,6 +146,12 @@ Issues = "https://github.com/Gravios/ns3-sort-bench/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Per-adapter tuning yamls read via importlib.resources at import time;
+# a source install resolves them on disk, a wheel install needs them in
+# package-data or the files are missing after `pip install`.
+"ns3_sort_bench.configs" = ["*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"

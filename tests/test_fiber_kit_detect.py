@@ -393,8 +393,22 @@ def test_materialise_recording_writes_dat_hardlinked_to_fil(tmp_path):
 def test_write_fk_config_pins_realign_off(tmp_path):
     """The auto-written fiber-kit.yaml must set FK_SESSION_REALIGN=off, with
     `off` quoted so YAML 1.1 doesn't coerce it to a boolean."""
-    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
-    path = _FiberKitBase._write_fk_config(str(tmp_path))
+    import os
+    # Scrub $FK_CONFIG so the merge sees only the baseline (not whatever
+    # the test environment has pointed at).
+    orig = os.environ.pop("FK_CONFIG", None)
+    try:
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+        # cwd a clean dir so ./fiber-kit.yaml doesn't exist either
+        cwd_before = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            path = _FiberKitBase._write_fk_config(str(tmp_path))
+        finally:
+            os.chdir(cwd_before)
+    finally:
+        if orig is not None:
+            os.environ["FK_CONFIG"] = orig
     assert Path(path).name == "fiber-kit.yaml"
     body = Path(path).read_text()
     assert 'FK_SESSION_REALIGN: "off"' in body
@@ -404,3 +418,81 @@ def test_write_fk_config_pins_realign_off(tmp_path):
     import yaml
     parsed = yaml.safe_load(body)
     assert parsed["FK_SESSION_REALIGN"] == "off"
+
+
+def test_write_fk_config_preserves_user_tuning(tmp_path):
+    """When the user has their own ./fiber-kit.yaml (or passes
+    fk_config_path), those keys MUST win in the merged per-session yaml.
+
+    Regression for the 349966b setup: before this fix, our minimal baseline
+    was the only thing written and FK_CONFIG pointed at it, so a user
+    ./fiber-kit.yaml holding FK_XCM_*, FK_CHUNKS, ... was silently
+    discarded — likely cause of fiber-session's 33 → 1 cluster collapse
+    on PAIRED_CRCNS_HC1.
+    """
+    import os, yaml
+    user_cfg = tmp_path / "user_tuning.yaml"
+    user_cfg.write_text(
+        "FK_XCM_WINDOW: 42\n"
+        "FK_CHUNKS: 8\n"
+        "FK_SESSION_REALIGN: \"on\"\n"      # the user overrides baseline
+    )
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+
+    orig = os.environ.pop("FK_CONFIG", None)
+    try:
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+        path = _FiberKitBase._write_fk_config(str(out_dir),
+                                                 user_cfg_path=str(user_cfg))
+    finally:
+        if orig is not None:
+            os.environ["FK_CONFIG"] = orig
+
+    parsed = yaml.safe_load(Path(path).read_text())
+    assert parsed["FK_XCM_WINDOW"] == 42
+    assert parsed["FK_CHUNKS"]     == 8
+    assert parsed["FK_SESSION_REALIGN"] == "on"       # user's value wins
+
+
+def test_write_fk_config_falls_back_to_cwd_fiber_kit_yaml(tmp_path, monkeypatch):
+    """When no explicit `fk_config_path` is given and `$FK_CONFIG` is unset,
+    the merge pulls from ``./fiber-kit.yaml`` in CWD (matching fiber-kit's
+    own `load_global_config` search order)."""
+    import os, yaml
+    cwd_yaml = tmp_path / "fiber-kit.yaml"
+    cwd_yaml.write_text("FK_RDR_MIN_AMP: 3.14\n")
+    monkeypatch.delenv("FK_CONFIG", raising=False)
+    monkeypatch.chdir(str(tmp_path))
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    path = _FiberKitBase._write_fk_config(str(out_dir))
+    parsed = yaml.safe_load(Path(path).read_text())
+    assert parsed["FK_RDR_MIN_AMP"] == 3.14
+    # Baseline still present for keys the user didn't set
+    assert parsed["FK_SESSION_REALIGN"] == "off"
+
+
+def test_write_fk_config_tolerates_broken_user_yaml(tmp_path):
+    """A malformed user yaml must NOT break the sort — fall back to the
+    baseline alone and leave a breadcrumb in the written file."""
+    import os
+    user_cfg = tmp_path / "bad.yaml"
+    user_cfg.write_text("this: is: not: yaml\n")          # invalid
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+
+    orig = os.environ.pop("FK_CONFIG", None)
+    try:
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+        path = _FiberKitBase._write_fk_config(str(out_dir),
+                                                 user_cfg_path=str(user_cfg))
+    finally:
+        if orig is not None:
+            os.environ["FK_CONFIG"] = orig
+
+    body = Path(path).read_text()
+    assert 'FK_SESSION_REALIGN: "off"' in body            # baseline survived
+    assert "WARNING" in body                               # breadcrumb for user

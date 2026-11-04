@@ -1,0 +1,19 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Kilosort 4 (via SpikeInterface) run_kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/si_sorters.py::Kilosort4Adapter.
+# Passed verbatim as **run_kwargs to spikeinterface.sorters.run_sorter().
+# Users can merge on top at call time via adapter.sort(run_kwargs={...}).
+#
+# Defaults tuned from claude/spikeinterface-g6-comparison.md:
+#   do_CAR=True subtracts spikes on sub-10-channel geometries; disabled.
+#   Th_universal / Th_learned ≈ default thresholds, slightly loosened.
+#   nblocks=0 disables drift tracking for the tetrode / sub-10-channel
+#   geometries this harness is aimed at — see the Contract's
+#   known_limitations.
+# ─────────────────────────────────────────────────────────────────────────────
+run_kwargs:
+  do_CAR:       false
+  Th_universal: 9.0
+  Th_learned:   8.0
+  nblocks:      0

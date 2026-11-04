@@ -29,9 +29,25 @@ import numpy as np
 from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
+from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+# ─── Baseline tuning loaded from ns3_sort_bench/configs/fiber_kit.yaml ──────
+# One place for the ndm_detect/extract/pca params and the FK_* baseline.
+# A missing key falls back to the hard-coded fallback below (keeps the
+# adapter working even if the file is deleted or empty).
+_FK_CFG = load_adapter_config("fiber_kit")
+
+
+def _cfg_section(name: str, fallback: Mapping[str, Any]) -> dict:
+    """Return the dict value at ``_FK_CFG[name]`` when it's a mapping;
+    otherwise the `fallback` dict verbatim.  Keeps the adapter resilient
+    to a truncated/missing config while still preferring on-disk tuning."""
+    v = _FK_CFG.get(name)
+    return dict(v) if isinstance(v, Mapping) else dict(fallback)
 
 
 # ─── Klusters-convention spike detection ─────────────────────────────────────
@@ -253,18 +269,26 @@ def _write_fet(path: str, features: np.ndarray) -> None:
 #   - neurosuite-3 is already installed in every environment this harness
 #     runs in (the adapter's Contract documents the hard dep).
 
-_NDM_DETECT_DEFAULTS = {
+# Sourced from src/ns3_sort_bench/configs/fiber_kit.yaml (ndm_detect /
+# ndm_extract / ndm_pca sections).  The in-code fallback below is used
+# only when the yaml is missing or truncated — the yaml is authoritative.
+_NDM_DETECT_DEFAULTS = _cfg_section("ndm_detect", {
     "thresholdFactor":  "0.8",     # × 4σ ≈ 3.2σ, the standard CA1 setting
     "refractoryPeriod": "16",      # samples
     "peakSearchLength": "16",      # samples
     "start":            "0",       # noise-window start (s)
     "duration":         "10",      # noise-window length (s)
     "method":           "standard",
-}
+})
 
-_NDM_EXTRACT_DEFAULTS = {"method": "standard"}
+_NDM_EXTRACT_DEFAULTS = _cfg_section("ndm_extract", {"method": "standard"})
 
-_NDM_PCA_DEFAULTS = {"method": "standard"}
+_NDM_PCA_DEFAULTS = _cfg_section("ndm_pca", {"method": "standard"})
+
+# Baseline FK_* overrides written into the per-session fiber-kit.yaml.
+# When the user has their own `./fiber-kit.yaml` (or passes `fk_config_path`),
+# their keys are merged in and win — this baseline fills the gaps.
+_FK_SESSION_BASELINE = _cfg_section("fiber_kit", {"FK_SESSION_REALIGN": "off"})
 
 
 def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
@@ -487,28 +511,85 @@ class _FiberKitBase(SorterAdapter):
     }
 
     @staticmethod
-    def _write_fk_config(tmp_dir: str) -> str:
-        """Write a minimal `fiber-kit.yaml` into the session's tmp dir and
-        return its path.  Overrides that matter for a from-scratch
-        SpikeInterface recording (no stderiv variant available):
+    def _write_fk_config(tmp_dir: str,
+                          user_cfg_path: Optional[str] = None) -> str:
+        """Write a per-session `fiber-kit.yaml` into `tmp_dir` and return
+        its path.  The file is the MERGE of two sources:
 
-          * FK_SESSION_REALIGN: "off"   — the end-of-run realign refuses to
-                                           work on raw waveforms when its token
-                                           asks for stderiv; we have no
-                                           .spk.stderiv.<g>, so disable it.
+          1. ``configs/fiber_kit.yaml`` → ``fiber_kit:`` baseline
+             (``_FK_SESSION_BASELINE``).  Load-bearing default:
+             ``FK_SESSION_REALIGN: "off"``, because the end-of-run realign
+             refuses to work on raw waveforms when its token asks for
+             stderiv — we have no ``.spk.stderiv.<g>``.
+          2. The user's own tuning, from `user_cfg_path` when given,
+             otherwise from `$FK_CONFIG`, otherwise from
+             ``./fiber-kit.yaml`` in CWD (the same search order
+             fiber-kit's ``load_global_config`` uses before we override
+             ``FK_CONFIG``).
 
-        The quoted form is deliberate: YAML 1.1 parses bare `off` as a boolean,
-        which fiber-kit's config loader then rejects as the wrong type.
+        User keys WIN on conflict — our baseline fills gaps.  The quoted
+        ``"off"`` is deliberate: YAML 1.1 reads bare ``off/on`` as booleans
+        and fiber-kit's config loader then rejects them as the wrong type.
+
+        Prior behaviour (patch 349966b) wrote ONLY the baseline, which,
+        combined with the FK_CONFIG override, silently discarded any
+        ``./fiber-kit.yaml`` tuning the user had — a regression this
+        merge undoes.
         """
+        import yaml as _yaml
+        merged: dict = dict(_FK_SESSION_BASELINE)
+
+        user_path = (user_cfg_path
+                      or os.environ.get("FK_CONFIG")
+                      or os.path.join(os.getcwd(), "fiber-kit.yaml"))
+        if user_path and os.path.isfile(user_path):
+            try:
+                with open(user_path) as f:
+                    loaded = _yaml.safe_load(f) or {}
+                if isinstance(loaded, dict):
+                    merged.update(loaded)       # user wins on key conflict
+            except (OSError, _yaml.YAMLError):
+                # A broken user yaml should NOT kill the sort; fall back
+                # to the baseline alone and leave a breadcrumb in the
+                # on-disk file so the user can spot the ignore.
+                merged.setdefault("# WARNING",
+                                   f"ignored unreadable {user_path!r}")
+
+        # Flat FK_* map: emit by hand so string values that LOOK like
+        # YAML 1.1 booleans (off/on/yes/no/true/false) stay quoted while
+        # keys remain bare — PyYAML's `default_style='"'` would quote both.
+        _YAML11_BOOLS = {"off", "on", "yes", "no", "true", "false",
+                          "y", "n", "t", "f"}
+
+        def _emit(v: Any) -> str:
+            if isinstance(v, bool):
+                return "true" if v else "false"
+            if isinstance(v, (int, float)):
+                return repr(v)
+            s = str(v)
+            needs_quotes = (
+                s == "" or s.strip() != s
+                or s.lower() in _YAML11_BOOLS
+                or any(c in s for c in ":#{}[]&*!|>'\"%@`,")
+            )
+            return f'"{s}"' if needs_quotes else s
+
         path = os.path.join(tmp_dir, "fiber-kit.yaml")
         with open(path, "w") as f:
             f.write(
                 "# Written by ns3_sort_bench.adapters.fiber_kit when it "
                 "materialised\n"
-                "# this session from a SpikeInterface BaseRecording.  Keep the\n"
-                "# quoted `off` strings — YAML 1.1 reads bare off/on as bools.\n"
-                "FK_SESSION_REALIGN: \"off\"\n"
+                "# this session from a SpikeInterface BaseRecording.\n"
+                "# Merge of configs/fiber_kit.yaml `fiber_kit:` baseline +\n"
+                f"# user tuning from {user_path!r}.  User keys WIN.\n"
+                "# Keep quoted `off/on` strings — YAML 1.1 reads bare "
+                "off/on as bools.\n"
             )
+            for k, v in merged.items():
+                if str(k).startswith("#"):
+                    f.write(f"{k}: {v}\n")
+                    continue
+                f.write(f"{k}: {_emit(v)}\n")
         return path
 
     def sort(self, recording, *, ns3_yaml=None, ground_truth_res=None,
@@ -570,13 +651,16 @@ class _FiberKitBase(SorterAdapter):
                     "`programs:` → ndm_detectspikes block."
                 )
 
-            # fiber-kit.yaml setup — explicit path wins; otherwise we write a
-            # minimal one next to the session and point FK_CONFIG at it.  This
-            # pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and makes
-            # the tuning reproducible across workstations.
-            fk_config = kwargs.get("fk_config_path") or env.get("FK_CONFIG")
-            if not fk_config:
-                fk_config = self._write_fk_config(tmp_dir)
+            # fiber-kit.yaml setup — always write a per-session merge of
+            # the baseline (configs/fiber_kit.yaml `fiber_kit:` section) and
+            # the user's own ./fiber-kit.yaml (or $FK_CONFIG, or an
+            # explicit fk_config_path), with USER KEYS WINNING on conflict.
+            # Pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and
+            # keeps the user's CA1 tuning (FK_XCM_*, FK_CHUNKS, ...) intact.
+            # Point FK_CONFIG at the merged file so every stage sees it.
+            fk_config = self._write_fk_config(
+                tmp_dir, user_cfg_path=kwargs.get("fk_config_path"),
+            )
             env["FK_CONFIG"] = fk_config
 
         # Inject --method standard on auto-materialised runs so every stage
