@@ -96,24 +96,32 @@ ibl = ["ONE-api == 3.6.2"]
 accel = ["numba == 0.68.1"]
 
 # CPU-only sorter bundle — no torch, no GPU wheels (~400 MB total install).
+# Includes [test] so `pytest tests/` works on a GPU-less workstation too.
 all-cpu = [
-    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spikeforest,accel]",
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spikeforest,accel,test]",
+]
+
+# Test runner — enough to `pytest tests/` without pulling in developer
+# tooling.  Included in [all] so a full install can validate itself.
+test = [
+    "pytest == 9.2.0",
+    "pytest-cov == 7.1.0",
+]
+
+# Dev / test — adds a linter on top of [test].
+dev = [
+    "ns3-sort-bench[test]",
+    "ruff == 0.17.3",
 ]
 
 # EVERYTHING pip-installable in one Python env.  Excludes SLAy (needs
 # its own Python 3.11 env, see the [slay] comment above).  Resolves to
 # ~148 packages, ~3 GB installed with the CUDA 13 wheels torch and
 # faiss pull in.  Verified cleanly on Python 3.13.18 / linux-x86_64 on
-# 2026-11-02.
+# 2026-11-02.  Includes [test] so a full install can self-check with
+# `pytest tests/` out of the box.
 all = [
-    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,kilosort4,dartsort,spikeforest,ibl,accel]",
-]
-
-# Dev / test
-dev = [
-    "pytest ~= 8.3.3",
-    "pytest-cov ~= 5.0.0",
-    "ruff ~= 0.14.1",
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,kilosort4,dartsort,spikeforest,ibl,accel,test]",
 ]
 
 [project.scripts]

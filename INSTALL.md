@@ -34,10 +34,32 @@ invalidate stored baselines.
 | Corpora | spikeforest 0.12.9 (+ kachery 2.0.3, sortingview 0.14.2), one-api 3.6.2 (IBL) |
 | fiber-kit | `git+https://github.com/Gravios/fiber-kit.git@<SHA>` (lockfile pins exact commit) |
 | Acceleration | numba 0.68.1 (SpikeInterface's spike-matching comparison fast path) |
+| Test runner | pytest 9.2.0, pytest-cov 7.1.0 |
 
 Total installed size with CUDA wheels: **~3 GB**.  Install `[all-cpu]`
 on GPU-less workstations to skip kilosort + dartsort + the ~2.5 GB of
-CUDA.
+CUDA (and still get pytest for the self-check).
+
+## Run the test suite after installing
+
+The `[test]` extra ships pytest + pytest-cov, and is pulled in by both
+`[all]` and `[all-cpu]`, so a full install can validate itself without
+a second `pip install` step:
+
+```sh
+pytest tests/ -q                                    # 20-ish hermetic cases
+pytest tests/ --cov=ns3_sort_bench --cov-report=term-missing  # with coverage
+```
+
+For a core-only install (`pip install ns3-sort-bench`), add the test
+extra explicitly:
+
+```sh
+pip install 'ns3-sort-bench[test]'
+```
+
+Add `[dev]` instead if you want ruff for linting / formatting alongside
+pytest.
 
 ## What `[all]` does NOT include — SLAy
 
