@@ -67,7 +67,8 @@ def cmd_run(args) -> int:
         adapter_kwargs["fk_artifacts_dir"] = f"{output_dir}/fiber_kit"
 
     bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
-                          adapter_kwargs=adapter_kwargs)
+                          adapter_kwargs=adapter_kwargs,
+                          export_klusters=plan.export_klusters)
 
     for key in corpus_keys:
         try:
@@ -87,6 +88,8 @@ def cmd_run(args) -> int:
         print(f"\nwrote {output_dir}/scores.csv  ({len(df)} rows)")
         if plan.keep_fk_artifacts:
             print(f"fiber-kit artifacts kept under {output_dir}/fiber_kit/")
+        if plan.export_klusters:
+            print(f"Klusters sessions written under {output_dir}/klusters/")
     return 0
 
 

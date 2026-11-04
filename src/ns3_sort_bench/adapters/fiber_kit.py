@@ -229,47 +229,137 @@ def _write_fet(path: str, features: np.ndarray) -> None:
         body.tofile(f)
 
 
+# ─── ndm_* delegation ────────────────────────────────────────────────────────
+# Rather than reimplement detection + extraction + PCA in Python, the adapter
+# shells out to neurosuite-3's `ndm_detectspikes`, `ndm_extractspikes` and
+# `ndm_pca`.  Reasons:
+#   - these are the reference implementations every other ns3 tool was built
+#     against (byte-exact outputs, correct stderiv transform, varimax PCA);
+#   - maintaining a parallel Python port is a liability — any drift between it
+#     and the C++/bash sources would silently bias benchmark numbers;
+#   - neurosuite-3 is already installed in every environment this harness
+#     runs in (the adapter's Contract documents the hard dep).
+
+_NDM_DETECT_DEFAULTS = {
+    "thresholdFactor":  "0.8",     # × 4σ ≈ 3.2σ, the standard CA1 setting
+    "refractoryPeriod": "16",      # samples
+    "peakSearchLength": "16",      # samples
+    "start":            "0",       # noise-window start (s)
+    "duration":         "10",      # noise-window length (s)
+    "method":           "standard",
+}
+
+_NDM_EXTRACT_DEFAULTS = {"method": "standard"}
+
+_NDM_PCA_DEFAULTS = {"method": "standard"}
+
+
+def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
+                            ) -> list:
+    """Build the `programs:` list for an auto-generated session yaml.
+
+    `ndm_detectspikes` / `ndm_extractspikes` / `ndm_pca` each read their
+    parameters from a `programs[].name == "ndm_<step>"` block of the session
+    yaml (doc/ndmanager-plugins/parameters.md).  This produces the minimal
+    set with sensible CA1 defaults; `overrides` merges per-step overrides
+    keyed by step name.
+    """
+    ov = dict(overrides or {})
+    def _block(step, defaults):
+        params = {**defaults, **ov.get(step, {})}
+        return {
+            "name": step,
+            "parameters": [
+                {"name": k, "value": v, "status": "Optional"}
+                for k, v in params.items()
+            ],
+        }
+    return [
+        _block("ndm_detectspikes", _NDM_DETECT_DEFAULTS),
+        _block("ndm_extractspikes", _NDM_EXTRACT_DEFAULTS),
+        _block("ndm_pca",           _NDM_PCA_DEFAULTS),
+    ]
+
+
+def _run_ndm(cmd_name: str, session_yaml: str, *,
+             extra: Sequence[str] = (), env: Optional[Mapping[str, str]] = None,
+             log_path: Optional[str] = None) -> None:
+    """Invoke a single `ndm_*` tool as a subprocess.
+
+    Captured stdout + stderr land in `log_path` when given; otherwise they
+    ride straight through to the parent's output.  Raises RuntimeError with
+    the log tail on a non-zero exit.
+    """
+    cmd = [cmd_name, session_yaml, "--force", *list(extra)]
+    env_full = {**os.environ, **(env or {})}
+    if log_path:
+        with open(log_path, "wb") as logf:
+            r = subprocess.run(cmd, env=env_full,
+                                 stdout=logf, stderr=subprocess.STDOUT,
+                                 check=False)
+    else:
+        r = subprocess.run(cmd, env=env_full, check=False)
+    if r.returncode != 0:
+        tail = ""
+        if log_path and os.path.exists(log_path):
+            try:
+                tail = open(log_path).read()[-2000:]
+            except OSError:
+                pass
+        raise RuntimeError(
+            f"{cmd_name} failed (exit {r.returncode}); log tail:\n{tail}"
+        )
+
+
 def detect_and_write_klusters(recording, base: str, group: int,
-                                *, threshold_sigma: float = _DEFAULT_THRESHOLD_SIGMA,
-                                dead_time_ms: float = _DEFAULT_DEAD_TIME_MS,
-                                n_samples: int = _NS_SAMPLES,
-                                peak_sample: int = _NS_PEAK,
-                                n_pcs_per_channel: int = 3,
+                                *, method: str = _NS3_METHOD,
                                 shared_res: Optional[np.ndarray] = None,
+                                env: Optional[Mapping[str, str]] = None,
+                                log_dir: Optional[str] = None,
                                 ) -> int:
     """Produce the Klusters-convention per-group files from a SpikeInterface
-    BaseRecording:
+    BaseRecording, delegating to neurosuite-3's `ndm_*` binaries:
 
-        <base>.res.standard.<group>   binary int64 ascending sample indices
-        <base>.spk.standard.<group>   binary int16 sample-major waveforms
-        <base>.fet.standard.<group>   binary int32 header + int64 features
+        <base>.res.<method>.<group>   ← ndm_detectspikes (or shared_res, below)
+        <base>.spk.<method>.<group>   ← ndm_extractspikes
+        <base>.fet.<method>.<group>   ← ndm_pca
+        <base>.pca.<method>.<group>   ← ndm_pca (PCAE basis)
 
-    Returns the number of spikes written.  Every downstream fiber-kit stage
-    or Klusters consumer finds all three files under ns3's canonical
-    `<base>.<type>.<method>.<group>` naming.
+    Assumes the shared `.fil` + `<base>.yaml` already exist next to `base`
+    (the adapter's `_materialise_recording` writes both before calling this).
 
     When `shared_res` is provided (a 1-D int array of sample indices), those
-    are used as the detections instead of running the MAD detector.
-    Snippets + features are still derived from the filtered trace.
+    are used as the detections instead of running `ndm_detectspikes`.
+    `ndm_extractspikes` and `ndm_pca` then run against that `.res` as normal.
+
+    Returns the number of spikes in the resulting `.res`.  Raises RuntimeError
+    with the step log tail when any ndm_* invocation exits non-zero.
     """
-    # Load traces (bytes are small for paired tetrode items; chunk later if needed).
-    n_samp = int(recording.get_num_samples(0))
-    traces = recording.get_traces(start_frame=0, end_frame=n_samp)
-    sr = float(recording.get_sampling_frequency())
-    traces_f = _bandpass(traces, sr)
-    if shared_res is None:
-        peaks = _detect_peak_indices(traces_f, sr, threshold_sigma, dead_time_ms)
+    session_yaml = base + ".yaml"
+    res_path = _klusters_path(base, "res", group, method=method)
+
+    if shared_res is not None:
+        # Project the GT's sample indices as the shared .res; skip detection.
+        arr = np.sort(np.asarray(shared_res, dtype=_RES_DTYPE).ravel())
+        with open(res_path, "wb") as f:
+            arr.tofile(f)
     else:
-        peaks = np.asarray(shared_res, dtype=_RES_DTYPE)
-    kept, snippets = _extract_snippets(traces_f, peaks,
-                                        n_samples=n_samples,
-                                        peak_sample=peak_sample)
-    _write_res(_klusters_path(base, "res", group), kept)
-    _write_spk(_klusters_path(base, "spk", group), snippets)
-    features = _compute_features(snippets, kept,
-                                  n_pcs_per_channel=n_pcs_per_channel)
-    _write_fet(_klusters_path(base, "fet", group), features)
-    return int(kept.size)
+        _run_ndm("ndm_detectspikes", session_yaml,
+                  extra=["--method", method], env=env,
+                  log_path=os.path.join(log_dir, "ndm_detectspikes.log")
+                           if log_dir else None)
+
+    _run_ndm("ndm_extractspikes", session_yaml,
+              extra=["--method", method], env=env,
+              log_path=os.path.join(log_dir, "ndm_extractspikes.log")
+                       if log_dir else None)
+    _run_ndm("ndm_pca", session_yaml,
+              extra=["--method", method], env=env,
+              log_path=os.path.join(log_dir, "ndm_pca.log")
+                       if log_dir else None)
+
+    n = int(os.path.getsize(res_path) // _RES_DTYPE.itemsize)
+    return n
 
 
 def _contract_for(mode: str, with_deconv: bool) -> Contract:
@@ -314,16 +404,18 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
             "Deconv ON requires fiber-kit >= 0.57.6 for the FK_SESSION_DECONV env flag.",
             "Variant/tag names must match the stage output you want "
             "(default: stderiv_C5_D34 / exp_final).",
-            "fiber-session reads <base>.res.<method>.<group> + .spk.<method>.<group> "
-            "at entry.  For a from-scratch SpikeInterface recording the adapter "
-            "runs a Python port of ndm_extractspikes (300-6000 Hz bandpass, "
-            "MAD-threshold detection, nSamples×nChannels waveform extraction) "
-            "and writes them under ns3's canonical naming "
-            "`.res.standard.<g>` / `.spk.standard.<g>` (doc/ndmanager-plugins/"
-            "formats/naming.md).  --method standard is injected into every "
-            "pipeline stage so resolves stay in the raw-waveform family; the "
-            "readback expects variant=`standard` and tag=`fiber_session` "
-            "(session-only mode) or `fiber_session_linked` (full chain).",
+            "Requires neurosuite-3's ndm_detectspikes, ndm_extractspikes and "
+            "ndm_pca on PATH.  For a from-scratch SpikeInterface recording "
+            "(SpikeForest paired items, Propper simulator, ...) the adapter "
+            "writes <base>.fil + <base>.yaml (with a `programs:` block "
+            "carrying CA1-sensible defaults) and shells out to the three "
+            "ndm_* tools in sequence to produce .res.standard.<g>, "
+            ".spk.standard.<g>, .fet.standard.<g> and .pca.standard.<g> under "
+            "ns3's canonical naming (doc/ndmanager-plugins/formats/naming.md).  "
+            "--method standard is injected into every pipeline stage so "
+            "resolves stay in the raw-waveform family; the readback expects "
+            "variant=`standard` and tag=`fiber_session` (session-only mode) "
+            "or `fiber_session_linked` (full chain).",
             "fiber-kit.yaml setup: pass fk_config_path=<path> or set "
             "$FK_CONFIG to point at your own tuning yaml.  When neither is set, "
             "the adapter writes a minimal `fiber-kit.yaml` next to the session "
@@ -450,32 +542,19 @@ class _FiberKitBase(SorterAdapter):
                         "ground_truth_res (the GT's spike sample indices)."
                     )
                 shared_res = np.asarray(ground_truth_res, dtype=_RES_DTYPE)
-            # Honour the session yaml's `nFeatures` (PC count per channel)
-            # when the loader attached one; otherwise fall back to 3 (the
-            # ns3 default and what template.yaml writes).
-            n_pcs = 3
-            try:
-                sd = (ns3_yaml or {}).get("spikeDetection", {})
-                groups = sd.get("channelGroups", []) if isinstance(sd, dict) else []
-                g = groups[group - 1] if 1 <= group <= len(groups) else {}
-                if isinstance(g, dict) and g.get("nFeatures"):
-                    n_pcs = int(g["nFeatures"])
-            except (KeyError, IndexError, TypeError, ValueError):
-                pass
             n_detected = detect_and_write_klusters(
                 recording, sess_base, group,
-                threshold_sigma=float(kwargs.get("detect_threshold_sigma",
-                                                  _DEFAULT_THRESHOLD_SIGMA)),
-                dead_time_ms=float(kwargs.get("detect_dead_time_ms",
-                                               _DEFAULT_DEAD_TIME_MS)),
-                n_pcs_per_channel=int(kwargs.get("n_pcs_per_channel", n_pcs)),
+                method=_NS3_METHOD,
                 shared_res=shared_res,
+                env=kwargs.get("ndm_env"),
+                log_dir=tmp_dir,
             )
             if n_detected == 0:
                 raise RuntimeError(
                     f"fiber_kit adapter: detection produced 0 spikes for "
-                    f"group {group} of {sess_base}.  Try lowering "
-                    "detect_threshold_sigma (default 5.0)."
+                    f"group {group} of {sess_base}.  Lower "
+                    "`thresholdFactor` in the session yaml's "
+                    "`programs:` → ndm_detectspikes block."
                 )
 
             # fiber-kit.yaml setup — explicit path wins; otherwise we write a
@@ -548,6 +627,13 @@ class _FiberKitBase(SorterAdapter):
         )
 
     def _materialise_recording(self, recording, tmp_dir: str) -> str:
+        """Write `<base>.fil` + `<base>.yaml` for a from-scratch SpikeInterface
+        recording.  The yaml carries both the session description that every
+        ns3 reader needs (`acquisitionSystem`, `spikeDetection.channelGroups`)
+        and a `programs:` block with sensible CA1 defaults for ndm_detectspikes,
+        ndm_extractspikes and ndm_pca — so a plain
+        `ndm_detectspikes <base>.yaml` works without further configuration.
+        """
         import yaml
         n_samp = recording.get_num_samples(0)
         n_ch = recording.get_num_channels()
@@ -556,6 +642,10 @@ class _FiberKitBase(SorterAdapter):
         traces = recording.get_traces(start_frame=0, end_frame=n_samp)
         traces_i16 = np.clip(np.rint(traces), -32768, 32767).astype(np.int16)
         traces_i16.tofile(base + ".fil")
+        # If the recording is shorter than the default 10-s noise window, clip
+        # the window to the recording duration so ndm_detectspikes doesn't
+        # error on `start + duration > samples / sr`.
+        noise_duration = min(10.0, float(n_samp) / float(sr) * 0.5)
         yml = {
             "parameters": {"version": "1.0", "creator": "ns3-sort-bench"},
             "acquisitionSystem": dict(nBits=16, nChannels=int(n_ch),
@@ -563,8 +653,14 @@ class _FiberKitBase(SorterAdapter):
                                        offset=0, samplingRate=float(sr)),
             "spikeDetection": {"channelGroups": [dict(
                 channels=list(range(n_ch)),
-                nSamples=32, peakSampleIndex=16, nFeatures=3,
+                nSamples=_NS_SAMPLES, peakSampleIndex=_NS_PEAK, nFeatures=3,
             )]},
+            # ndm_detectspikes / ndm_extractspikes / ndm_pca read their
+            # parameters here.  Overrides are per-adapter / per-call via
+            # the sort() kwargs `ndm_*_overrides` dict.
+            "programs": _programs_yaml_section(overrides={
+                "ndm_detectspikes": {"duration": str(noise_duration)},
+            }),
         }
         with open(base + ".yaml", "w") as f:
             yaml.safe_dump(yml, f, sort_keys=False)

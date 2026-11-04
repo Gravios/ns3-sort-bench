@@ -97,6 +97,21 @@ def cmd_set_keep_fk_artifacts(args) -> int:
     return 0
 
 
+def cmd_set_export_klusters(args) -> int:
+    val = _parse_bool(args.value)
+    if val is None:
+        eprint(f"export-klusters expects true|false, got {args.value!r}")
+        return 1
+    plan = Plan.load()
+    plan.export_klusters = val
+    plan.save()
+    print(f"export_klusters = {plan.export_klusters}")
+    if val:
+        print(f"  → per-adapter Klusters sessions will land under "
+              f"{plan.output_dir}/klusters/<corpus_item>/<adapter>/")
+    return 0
+
+
 # ─── show / reset ───────────────────────────────────────────────────────────
 def cmd_show(args) -> int:
     plan = Plan.load()
@@ -141,6 +156,10 @@ def register(subparsers) -> None:
         ("keep-fk-artifacts", cmd_set_keep_fk_artifacts,
          "true|false — keep fiber-kit per-sort workspace under "
          "<output_dir>/fiber_kit/<item>/ instead of cleaning up a tmp dir"),
+        ("export-klusters",   cmd_set_export_klusters,
+         "true|false — write a Klusters-openable per-adapter session "
+         "(.fil + .yaml + .res/.spk/.fet/.pca/.clu via ndm_*) under "
+         "<output_dir>/klusters/<item>/<adapter>/ after each corpus item"),
     ):
         sp = st_sub.add_parser(key, help=help_)
         sp.add_argument("value", help=help_)

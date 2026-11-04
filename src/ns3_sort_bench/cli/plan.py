@@ -48,7 +48,7 @@ def plan_path() -> Path:
 _PLAN_FIELDS = (
     "corpora", "adapters", "scorers",
     "output_dir", "ns3_yaml", "delta_frames",
-    "keep_fk_artifacts",
+    "keep_fk_artifacts", "export_klusters",
 )
 
 
@@ -67,6 +67,13 @@ class Plan:
     # <output_dir>/fiber_kit/<item_slug>/ and never deletes it.  Default
     # false — sorts go to a tmp dir that is cleaned up on success.
     keep_fk_artifacts: bool       = False
+    # When true, after every corpus item is done, write a stand-alone
+    # Klusters-openable session for every (adapter + ground_truth) under
+    # <output_dir>/klusters/<item_slug>/<adapter_slug>/.  Each dir carries
+    # its own .fil + .yaml + .res + .spk + .fet + .pca + .clu (produced by
+    # neurosuite-3's ndm_extractspikes / ndm_pca binaries); open
+    # sim_session.yaml in Klusters to curate that adapter's clusters.
+    export_klusters: bool         = False
 
     # ─── load / save ────────────────────────────────────────────────────────
     @classmethod
@@ -132,4 +139,5 @@ class Plan:
         if self.delta_frames is not None:
             lines.append(f"delta_frames: {self.delta_frames}")
         lines.append(f"keep_fk_artifacts: {self.keep_fk_artifacts}")
+        lines.append(f"export_klusters: {self.export_klusters}")
         return "\n".join(lines)

@@ -210,6 +210,12 @@ class BenchmarkRun:
     scorers: List[Scorer] = field(default_factory=list)
     verbose: bool = True
     adapter_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    # When true, after every corpus item is fully sorted, write a
+    # stand-alone Klusters-openable session for each adapter (plus the
+    # ground truth) at `<output_dir>/klusters/<item>/<adapter>/` via
+    # `ns3_sort_bench.klusters_export.export_klusters_session`.  Requires
+    # neurosuite-3's `ndm_extractspikes` and `ndm_pca` on PATH.
+    export_klusters: bool = False
 
     def add_corpus(self, c: Corpus) -> "BenchmarkRun":
         self.corpora.append(c); return self
@@ -237,6 +243,9 @@ class BenchmarkRun:
         for corpus in self.corpora:
             self._log(f"corpus: {corpus.name} ({corpus.kind})")
             ref = corpus.ground_truth
+            # Successful candidates for THIS corpus, keyed by adapter name;
+            # consumed by the Klusters export at the end of the inner loop.
+            candidates_for_corpus: Dict[str, SortedResult] = {}
 
             for adapter in self.adapters:
                 ok, reason = adapter.available()
@@ -293,12 +302,25 @@ class BenchmarkRun:
                           f"{candidate.n_spikes():,} spikes, "
                           f"{candidate.wall_time_s:.1f}s, "
                           f"{candidate.peak_rss_mb:.0f} MB")
+                candidates_for_corpus[adapter.name] = candidate
 
                 for scorer in self.scorers:
                     try:
                         rows.extend(scorer(ref, candidate).to_rows())
                     except Exception as e:
                         self._log(f"    scorer {scorer.name} FAILED: {type(e).__name__}: {e}")
+
+            # End of adapter loop for THIS corpus.  Write per-adapter Klusters
+            # sessions (via neurosuite-3's ndm_* binaries) when requested.
+            if self.export_klusters and candidates_for_corpus:
+                try:
+                    from .klusters_export import export_klusters_session
+                    item_dir = export_klusters_session(
+                        self.output_dir, corpus, candidates_for_corpus,
+                    )
+                    self._log(f"  klusters sessions written under {item_dir}")
+                except Exception as e:
+                    self._log(f"  klusters export FAILED: {type(e).__name__}: {e}")
 
         df = pd.DataFrame(rows)
         df.to_csv(os.path.join(self.output_dir, "scores.csv"), index=False)

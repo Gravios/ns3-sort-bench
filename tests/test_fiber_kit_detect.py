@@ -183,60 +183,147 @@ def test_klusters_path_follows_ns3_naming():
     assert _NS3_METHOD == "standard"
 
 
-# ─── end-to-end .res + .spk writer ──────────────────────────────────────────
-def test_detect_and_write_klusters_files_and_shapes(tmp_path):
-    tr, truth, sr = _synth_tetrode(n_samp=20000 * 3, spike_hz=40.0, seed=2)
-    rec = _FakeRec(tr, sr)
+# ─── ndm_* delegation ────────────────────────────────────────────────────────
+# `detect_and_write_klusters` now shells out to neurosuite-3's `ndm_detectspikes`,
+# `ndm_extractspikes`, `ndm_pca`.  CI can't install ns3, so these tests mock
+# subprocess.run and assert the commands are invoked with the right arguments.
+import subprocess as _subprocess
+
+from ns3_sort_bench.adapters.fiber_kit import (
+    detect_and_write_klusters, _programs_yaml_section,
+)
+
+
+class _RecordingRuns:
+    """subprocess.run replacement that records invocations and simulates
+    the side effect each `ndm_*` tool would have (writing its output file).
+    """
+    def __init__(self, base, group, n_spikes=50, n_samples=32, n_ch=4):
+        self.calls = []
+        self.base = base
+        self.group = group
+        self.n_spikes = n_spikes
+        self.n_samples = n_samples
+        self.n_ch = n_ch
+
+    def __call__(self, cmd, *args, **kw):
+        self.calls.append(list(cmd))
+        name = cmd[0]
+        g = self.group
+        if name == "ndm_detectspikes":
+            Path(f"{self.base}.res.standard.{g}").write_bytes(
+                np.arange(self.n_spikes, dtype="<i8").tobytes()
+            )
+        elif name == "ndm_extractspikes":
+            Path(f"{self.base}.spk.standard.{g}").write_bytes(
+                b"\x00" * (self.n_spikes * self.n_samples * self.n_ch * 2)
+            )
+        elif name == "ndm_pca":
+            Path(f"{self.base}.fet.standard.{g}").write_bytes(
+                b"\x00" * (4 + self.n_spikes * 4 * 8)
+            )
+            Path(f"{self.base}.pca.standard.{g}").write_bytes(b"\x00" * 36)
+        rc = _subprocess.CompletedProcess(cmd, 0, b"", b"")
+        return rc
+
+
+def _make_base_with_yaml(tmp_path) -> str:
+    """Write the minimal <base>.yaml a mocked ndm_detectspikes would see."""
     base = str(tmp_path / "session")
-    n_detected = detect_and_write_klusters(rec, base=base, group=1)
-
-    # Canonical paths — NOT the legacy untagged `.res.1` / `.spk.1`.
-    res_path = Path(f"{base}.res.standard.1")
-    spk_path = Path(f"{base}.spk.standard.1")
-    assert res_path.exists() and spk_path.exists()
-    # And the legacy untagged names must NOT be written (they would mask the
-    # canonical ones under fiber-kit's Shared-type resolver).
-    assert not Path(f"{base}.res.1").exists()
-    assert not Path(f"{base}.spk.1").exists()
-
-    # .res: binary int64 LE, ascending, 0-indexed, exact byte count
-    assert res_path.stat().st_size == n_detected * 8
-    samples = np.fromfile(res_path, dtype="<i8")
-    assert samples.size == n_detected
-    assert np.all(np.diff(samples) >= 0)
-    assert np.all((samples >= 0) & (samples < tr.shape[0]))
-
-    # .spk: int16 LE, size exactly nspikes * 32 * n_ch * 2 bytes
-    expected_bytes = n_detected * _NS_SAMPLES * tr.shape[1] * 2
-    assert spk_path.stat().st_size == expected_bytes
+    Path(base + ".yaml").write_text("acquisitionSystem: {}\n")
+    Path(base + ".fil").write_bytes(b"")
+    return base
 
 
-def test_res_and_spk_counts_agree(tmp_path):
-    """fiber-session's `check_spk_count` asserts the two writers agree.
-    This is the exact regression that broke the paired-recordings sweep."""
-    tr, _, sr = _synth_tetrode(n_samp=20000 * 4, spike_hz=35.0, seed=4)
-    rec = _FakeRec(tr, sr)
-    base = str(tmp_path / "session")
-    n = detect_and_write_klusters(rec, base=base, group=3)
-    n_from_res = Path(f"{base}.res.standard.3").stat().st_size // 8
-    n_from_spk = Path(f"{base}.spk.standard.3").stat().st_size // (_NS_SAMPLES * tr.shape[1] * 2)
-    assert n_from_res == n_from_spk == n
+def test_detect_and_write_klusters_runs_the_three_ndm_tools(tmp_path, monkeypatch):
+    base = _make_base_with_yaml(tmp_path)
+    runner = _RecordingRuns(base, group=1, n_spikes=42)
+    monkeypatch.setattr(_subprocess, "run", runner)
+
+    n = detect_and_write_klusters(
+        _FakeRec(np.zeros((1000, 4), dtype=np.int16), 20000.0),
+        base=base, group=1,
+    )
+
+    # Three ndm_* subprocesses were invoked, in pipeline order.
+    assert [c[0] for c in runner.calls] == [
+        "ndm_detectspikes", "ndm_extractspikes", "ndm_pca",
+    ]
+    for c in runner.calls:
+        assert c[1] == base + ".yaml"
+        assert "--method" in c and "standard" in c
+        assert "--force" in c
+
+    # The .res byte count determines the returned spike count.
+    assert n == 42
 
 
-def test_shared_detection_uses_ground_truth_res(tmp_path):
-    """shared_res bypasses the MAD detector; .res equals the input indices
-    (minus any truncated-at-boundary peaks)."""
-    tr, truth, sr = _synth_tetrode(n_samp=20000 * 2, spike_hz=20.0, seed=3)
-    # Keep only peaks safely inside boundaries
-    safe = truth[(truth >= _NS_PEAK) &
-                 (truth + (_NS_SAMPLES - _NS_PEAK) <= tr.shape[0])]
-    rec = _FakeRec(tr, sr)
-    base = str(tmp_path / "session")
-    n_written = detect_and_write_klusters(rec, base=base, group=2,
-                                           shared_res=safe)
-    on_disk = np.fromfile(f"{base}.res.standard.2", dtype="<i8").tolist()
-    assert on_disk == sorted(safe.tolist())
-    assert n_written == safe.size
+def test_shared_detection_skips_detectspikes(tmp_path, monkeypatch):
+    """shared_res=<GT samples> writes the .res directly and skips
+    ndm_detectspikes; the rest of the chain still runs."""
+    base = _make_base_with_yaml(tmp_path)
+    gt = np.array([100, 200, 300, 400, 500], dtype=np.int64)
+    runner = _RecordingRuns(base, group=2, n_spikes=gt.size)
+    monkeypatch.setattr(_subprocess, "run", runner)
+
+    n = detect_and_write_klusters(
+        _FakeRec(np.zeros((10000, 4), dtype=np.int16), 20000.0),
+        base=base, group=2, shared_res=gt,
+    )
+
+    assert [c[0] for c in runner.calls] == ["ndm_extractspikes", "ndm_pca"]
+    assert n == gt.size
+    # .res holds exactly the GT samples, sorted, binary int64 LE
+    on_disk = np.fromfile(f"{base}.res.standard.2", dtype="<i8")
+    assert on_disk.tolist() == sorted(gt.tolist())
+
+
+def test_detect_and_write_klusters_raises_on_ndm_failure(tmp_path, monkeypatch):
+    base = _make_base_with_yaml(tmp_path)
+
+    def _failing_run(cmd, *args, **kw):
+        if cmd[0] == "ndm_extractspikes":
+            Path(kw.get("stdout").name if hasattr(kw.get("stdout"), "name")
+                 else "/dev/null")
+            return _subprocess.CompletedProcess(cmd, 2, b"", b"")
+        # detectspikes succeeds, writes a .res
+        Path(f"{base}.res.standard.1").write_bytes(
+            np.arange(5, dtype="<i8").tobytes()
+        )
+        return _subprocess.CompletedProcess(cmd, 0, b"", b"")
+
+    monkeypatch.setattr(_subprocess, "run", _failing_run)
+    with pytest.raises(RuntimeError, match="ndm_extractspikes failed"):
+        detect_and_write_klusters(
+            _FakeRec(np.zeros((1000, 4), dtype=np.int16), 20000.0),
+            base=base, group=1,
+        )
+
+
+# ─── programs-yaml section helper ───────────────────────────────────────────
+def test_programs_yaml_section_minimum_set():
+    """The yaml's `programs:` block must carry all three ndm_* steps and
+    their mandatory parameters so `ndm_detectspikes <base>.yaml` works
+    without further configuration."""
+    programs = _programs_yaml_section()
+    steps = {p["name"]: p for p in programs}
+    assert set(steps) == {"ndm_detectspikes", "ndm_extractspikes", "ndm_pca"}
+    detect_params = {p["name"] for p in steps["ndm_detectspikes"]["parameters"]}
+    # Every ndm_detectspikes mandatory parameter is present
+    assert {"thresholdFactor", "refractoryPeriod", "peakSearchLength",
+            "start", "duration", "method"} <= detect_params
+
+
+def test_programs_yaml_section_overrides_merge():
+    programs = _programs_yaml_section(overrides={
+        "ndm_detectspikes": {"thresholdFactor": "0.5", "start": "2"},
+    })
+    detect = next(p for p in programs if p["name"] == "ndm_detectspikes")
+    params = {p["name"]: p["value"] for p in detect["parameters"]}
+    assert params["thresholdFactor"] == "0.5"
+    assert params["start"] == "2"
+    # Non-overridden mandatory parameters survive
+    assert params["method"] == "standard"
 
 
 # ─── .fet writer / feature computation ──────────────────────────────────────
@@ -275,33 +362,9 @@ def test_write_fet_byte_layout(tmp_path):
     assert body.reshape(2, 4).tolist() == feats.tolist()
 
 
-def test_detect_and_write_klusters_emits_fet_too(tmp_path):
-    """.fet.standard.<g> must land alongside .res + .spk."""
-    tr, _, sr = _synth_tetrode(n_samp=20000 * 3, spike_hz=40.0, seed=7)
-    rec = _FakeRec(tr, sr)
-    base = str(tmp_path / "session")
-    n_detected = detect_and_write_klusters(rec, base=base, group=1,
-                                            n_pcs_per_channel=3)
-    fet_path = Path(f"{base}.fet.standard.1")
-    assert fet_path.exists()
-    # Header byte count + body byte count
-    expected_body_bytes = n_detected * (3 * tr.shape[1] + 1) * 8
-    assert fet_path.stat().st_size == 4 + expected_body_bytes
-
-
-def test_detect_and_write_zero_spikes_returns_zero(tmp_path):
-    rng = np.random.default_rng(0)
-    tr = (rng.standard_normal((20000 * 2, 4)) * 10.0).astype(np.float32)
-    rec = _FakeRec(tr, 20000.0)
-    base = str(tmp_path / "session")
-    n = detect_and_write_klusters(rec, base=base, group=1,
-                                   threshold_sigma=15.0)
-    assert n < 20
-    # All three files still land — downstream readers rely on the triple
-    # being present and self-consistent, even when empty.
-    assert Path(f"{base}.res.standard.1").exists()
-    assert Path(f"{base}.spk.standard.1").exists()
-    assert Path(f"{base}.fet.standard.1").exists()
+# (.fet.standard.<g> is now produced by ndm_pca, exercised by
+# test_detect_and_write_klusters_runs_the_three_ndm_tools above.  The zero-
+# spike path is similarly ndm_detectspikes' responsibility now.)
 
 
 # ─── fiber-kit.yaml setup ───────────────────────────────────────────────────
