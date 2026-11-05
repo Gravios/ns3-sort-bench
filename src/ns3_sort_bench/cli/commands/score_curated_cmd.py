@@ -78,6 +78,13 @@ def _clu_path(base: str, tag: str) -> str:
     return f"{base}.clu.{_METHOD_TOKEN}.{_GROUP}.{tag}"
 
 
+def _untagged_clu_path(base: str) -> str:
+    """Canonical ns3 .clu path (no stage tag), the one klusters_export
+    actually writes today: ``<base>.clu.<method>.<group>``.  The curated
+    .clu is tag-suffixed (``.curated``); the raw sort-export is not."""
+    return f"{base}.clu.{_METHOD_TOKEN}.{_GROUP}"
+
+
 def _res_path(base: str) -> str:
     return f"{base}.res.{_METHOD_TOKEN}.{_GROUP}"
 
@@ -85,16 +92,32 @@ def _res_path(base: str) -> str:
 def _find_raw_clu(sess_dir: str, sorter: str) -> Optional[str]:
     """Return the sorter's RAW .clu path, or None if nothing matches.
 
-    Prefers the sorter's documented tag (``_RAW_TAG_FOR_SORTER``); falls
-    back to any .clu.standard.1.* in the dir that is NOT the curated one.
+    klusters_export writes the canonical un-tagged .clu
+    (``<base>.clu.<method>.<group>``) when it exports a sort to disk.
+    Older designs / future-us may also emit a stage-tagged variant
+    (``<base>.clu.<method>.<group>.<tag>``) — we accept both.  Order of
+    preference:
+      1. The un-tagged canonical path — what klusters_export writes.
+      2. The sorter's documented stage tag from ``_RAW_TAG_FOR_SORTER``.
+      3. A glob scan over every tag in the dir (skipping curated,
+         autosave, and the curated-log .cur siblings' tails).
+
+    Returns None only if all three come up empty.
     """
     base = os.path.join(sess_dir, "sim_session")
+    # (1) Untagged canonical — the only thing klusters_export writes.
+    untagged = _untagged_clu_path(base)
+    if os.path.exists(untagged):
+        return untagged
+    # (2) Documented stage tag (useful once klusters_export learns to
+    # tag the end-of-chain write with its mode's final tag — see
+    # patch 0022's note).
     tag = _RAW_TAG_FOR_SORTER.get(sorter, sorter)
     direct = _clu_path(base, tag)
     if os.path.exists(direct):
         return direct
-    # Fallback scan: pick any .clu.<method>.<group>.* that is not the
-    # curated one and is not an atomic / stale sibling.
+    # (3) Fallback scan — pick any .clu.<method>.<group>.* that is not
+    # the curated one and is not an atomic / stale sibling.
     pattern = f"{base}.clu.{_METHOD_TOKEN}.{_GROUP}.*"
     for p in sorted(glob.glob(pattern)):
         tail = p.rsplit(".", 1)[-1]
