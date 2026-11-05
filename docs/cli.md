@@ -20,6 +20,7 @@ and forwards to the same `main()`.
 | `inspect`    | load one corpus and summarise it (channels, duration, GT) |
 | `contract`   | print one adapter's Contract |
 | `run`        | execute the plan (or a one-shot via flags) |
+| `fk-sweep`   | run fiber_kit over a set of FK_* values; table of fiber_session / final scores |
 | `summary`    | corpus × adapter × metric pivot for one scored run |
 | `compare`    | diff two scored runs (B − A); regressions and improvements separately |
 | `lattice`    | fiber-kit lattice ablation (passes through to `runners.lattice`) |
@@ -100,6 +101,26 @@ ns3sb run --quiet
 
 Flag precedence: CLI flags > plan > defaults.  CLI flags never mutate
 the plan — add to the plan with `load` / `set` for persistence.
+
+## Sweep fiber-kit settings
+
+```sh
+# list the runs first: the default sweeps fiber-session knobs one at a time
+ns3sb fk-sweep --corpus paired_crcns_hc1:d11221_d11221.001 \
+               --out runs/fk_sweep --dry-run
+
+# your own keys and values; --grid runs every combination instead
+ns3sb fk-sweep --corpus paired_crcns_hc1:d11221_d11221.001 --out runs/fk_sweep \
+               --set FK_SESSION_RKK_PENALTY_MIX=0,0.5,1 --set FK_SESSION_DIPSPLIT=0,1 --grid
+```
+
+Each setting runs `ns3sb run --adapters fiber_kit --scorers per_cell` in
+`<out>/<setting>/`, in a fresh temporary folder, with `$FK_CONFIG` set to
+`<out>/<setting>/fk-tuning.yaml`: the base tuning (`--base-config`, default
+`$FK_CONFIG`) plus that setting.  A first `baseline` run uses the base
+tuning alone.  The table (also `<out>/sweep.csv`) gives cluster count, IoU,
+recall and precision at fiber_session and at the final stage.  Finished
+settings are reused when you run the same sweep again; `--rerun` forces them.
 
 ## Inspection
 

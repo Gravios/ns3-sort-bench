@@ -15,6 +15,7 @@ from .commands import (
     run_cmd,
     score_curated_cmd,
     inspect_clu_cmd,
+    fk_sweep_cmd,
 )
 from .plan import plan_path
 
@@ -79,6 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
     contract_cmd.register(sub)
     # Running
     run_cmd.register(sub)
+    fk_sweep_cmd.register(sub)
     # Review of previous runs
     review_cmd.register(sub)
     # Curation-effort diff (Klusters .clu + .cur comparison)
