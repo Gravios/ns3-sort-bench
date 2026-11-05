@@ -244,6 +244,20 @@ def _directed_move_audit(ref_lab, cand_lab, tab, u_ref, u_can):
     return fixed, broke
 
 
-_register(scorer_registry, PairwiseScorer(), "pairwise")
-_register(scorer_registry, PairwiseScorer(delta_frames=12),
-          "pairwise_delta12")   # ~0.4 ms @ 32 kHz
+# Default "pairwise" uses a 12-sample near-match tolerance (~0.6 ms at
+# 20 kHz, ~0.4 ms at 32 kHz).  Independent-detection sorts (the common
+# case — GT juxta vs extracellular sort) have 1-5-sample timing offsets
+# between the two detection modes, so delta=0 (exact index match) sees
+# essentially no co-occurrences and collapses n_matched_spikes to zero
+# for any realistic sort against juxta GT.  The 12-sample tolerance
+# matches what per_cell uses by default, so the two scorers' contingency
+# tables agree.  An explicit "pairwise_exact" registration is kept for
+# the shared-detection scoring path (fiber_kit with
+# shared_detection=True, propper_sim, hybrid corpora) where the sort
+# is built on top of the GT spike indices and exact-match is correct.
+_register(scorer_registry, PairwiseScorer(delta_frames=12), "pairwise")
+_register(scorer_registry, PairwiseScorer(delta_frames=0),  "pairwise_exact")
+# Back-compat: the old name still resolves to the near-match scorer
+# (same instance a caller gets via "pairwise") so any plan that lists
+# "pairwise_delta12" by name keeps working.
+_register(scorer_registry, PairwiseScorer(delta_frames=12), "pairwise_delta12")

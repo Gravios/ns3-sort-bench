@@ -91,6 +91,26 @@ def test_pairwise_n_match_agrees_with_per_cell_best_unit_count():
     )
 
 
+def test_registered_pairwise_uses_near_match_tolerance():
+    """The `pairwise` scorer in the registry MUST default to
+    delta_frames=12 (~0.6 ms at 20 kHz) — on an independent-detection
+    sort against juxta GT, exact-index matching (delta=0) collapses
+    n_matched_spikes to coincidental matches (4 of 123 on hc1) and
+    makes the pairwise metrics useless.
+
+    If someone adds a new registration without delta_frames, this test
+    catches the regression.  `pairwise_exact` is the explicit opt-in
+    for shared-detection scoring and must retain delta=0.
+    """
+    from ns3_sort_bench._base import scorer_registry
+    from ns3_sort_bench import scorers as _  # noqa — populate registry
+
+    assert scorer_registry["pairwise"].delta_frames == 12
+    assert scorer_registry["pairwise_exact"].delta_frames == 0
+    # Back-compat alias keeps working for plans that named it.
+    assert scorer_registry["pairwise_delta12"].delta_frames == 12
+
+
 def test_pairwise_match_drops_reserved_before_match():
     """Candidates in Klusters-reserved clusters (0/1) must be dropped
     BEFORE the nearest-neighbour match runs — otherwise a reserved
