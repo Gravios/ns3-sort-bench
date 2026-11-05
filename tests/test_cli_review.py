@@ -231,6 +231,87 @@ def test_summary_org_separates_pipeline_stages_from_primaries(tmp_path):
     assert "+-" in stages_block.split("| stage")[1]
 
 
+def test_summary_merges_curated_scores_csv_as_stage_rows(tmp_path):
+    """When `curated_scores.csv` lives beside `scores.csv`, `ns3sb summary`
+    must fold its `stage=curated` rows into the main pivot as
+    `<sorter>@curated` candidate adapters — they then render under the
+    stage sub-table AFTER the `final` row, so the raw-to-curated delta
+    is visible in the same block the pipeline stages already use.
+    """
+    rundir = tmp_path / "curated_run"
+    rundir.mkdir()
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", "sim1", "gt", "fiber_kit", "best_unit_accuracy_mean", 0.048),
+        ("per_cell", "sim1", "gt", "fiber_kit", "best_unit_recall_mean",   0.691),
+        ("per_cell", "sim1", "gt", "kilosort4", "best_unit_accuracy_mean", 0.051),
+        ("per_cell", "sim1", "gt", "kilosort4", "best_unit_recall_mean",   0.659),
+    ])
+    # curated_scores.csv has the shape score-curated writes.
+    import pandas as pd
+    pd.DataFrame([
+        ("fiber_kit", "sim1", "raw",     "per_cell",
+         "best_unit_accuracy_mean", 0.048),
+        ("fiber_kit", "sim1", "curated", "per_cell",
+         "best_unit_accuracy_mean", 0.42),
+        ("fiber_kit", "sim1", "curated", "per_cell",
+         "best_unit_recall_mean",   0.85),
+    ], columns=["sorter", "corpus_item", "stage",
+                "scorer", "metric", "value"]
+    ).to_csv(rundir / "curated_scores.csv", index=False)
+
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+
+    # The curated row must NOT live in the primary scoreboard block —
+    # it belongs under fiber_kit's stage sub-table.
+    main_block = out.split("## fiber_kit stages")[0]
+    stages_block = out.split("## fiber_kit stages")[1]
+    assert "curated" not in main_block
+    # And it must appear AFTER the final row — curation happens on top
+    # of the final sort, so rendering it earlier would mis-order the
+    # workflow.
+    assert stages_block.index("final") < stages_block.index("curated")
+    # The curated's own numbers made it in (sanity check).
+    assert "0.4200" in stages_block
+    assert "0.8500" in stages_block
+    # The raw-stage row from curated_scores.csv is DROPPED (score-curated
+    # re-scores the sorter's own .clu against GT and emits stage=raw,
+    # which would duplicate the primary scores.csv row).  0.048 shows
+    # up exactly twice — once in the main table for fiber_kit and once
+    # as the `final` row in fiber_kit's stage block (that row is the
+    # SAME primary) — NOT a third time from a raw-stage merge.
+    assert out.count("0.0480") == 2
+    # Nothing in the stages block carries the explicit "raw" label either.
+    assert "| raw" not in stages_block
+
+
+def test_summary_without_curated_scores_csv_is_unchanged(tmp_path):
+    """Safety guard: when curated_scores.csv is absent, the summary is
+    identical to the pre-patch behaviour — the merge is strictly
+    additive.
+    """
+    rundir = tmp_path / "no_curated"
+    rundir.mkdir()
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", "sim1", "gt", "fiber_kit", "best_unit_accuracy_mean", 0.048),
+        ("per_cell", "sim1", "gt", "kilosort4", "best_unit_accuracy_mean", 0.051),
+    ])
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+    # No stage sub-section anywhere.
+    assert "## " not in out
+    # No stray "@" adapter names in the main table.
+    assert "@" not in out
+
+
 def test_summary_org_no_stages_section_when_no_stage_rows(tmp_path):
     """Adapters with no `@<tag>` rows must not produce an empty
     `## <primary> stages` block.

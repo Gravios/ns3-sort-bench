@@ -127,17 +127,47 @@ def _org_table(headers: Sequence[str], rows: Sequence[Sequence[str]],
 def _load_scores(run_dir: Path):
     """Return the scores DataFrame or raise FileNotFoundError.
 
-    Reads with `keep_default_na=False` and a narrow `na_values` set so a
-    row whose `corpus_item` happens to be the literal string "None" (or an
-    adapter name of "NA", etc.) is NOT silently coerced to NaN — pandas's
-    default `na_values` list is surprisingly wide and takes out legitimate
-    identifier strings.  Empty cells are still NaN.
+    Reads scores.csv with `keep_default_na=False` and a narrow
+    `na_values` set so a row whose `corpus_item` happens to be the
+    literal string "None" (or an adapter name of "NA", etc.) is NOT
+    silently coerced to NaN — pandas's default `na_values` list is
+    surprisingly wide and takes out legitimate identifier strings.
+    Empty cells are still NaN.
+
+    When ``curated_scores.csv`` also lives in the run directory (written
+    by ``ns3sb score-curated``), its ``stage=curated`` rows are appended
+    to the returned frame under candidate adapter
+    ``<sorter>@curated`` — so they render in the "## <sorter> stages"
+    sub-table ns3sb summary already emits (patch 0019), right alongside
+    the pipeline-stage rows.  The ``stage=raw`` rows are dropped: they
+    are a re-scoring of the same .clu already in scores.csv and would
+    duplicate the primary.
     """
     import pandas as pd
     p = Path(run_dir) / "scores.csv"
     if not p.exists():
         raise FileNotFoundError(f"no scores.csv in {run_dir}")
     df = pd.read_csv(p, keep_default_na=False, na_values=[""])
+
+    curated = Path(run_dir) / "curated_scores.csv"
+    if curated.exists():
+        cdf = pd.read_csv(curated, keep_default_na=False, na_values=[""])
+        # curated_scores.csv shape:
+        #     sorter, corpus_item, stage, scorer, metric, value
+        # Normalise into scores.csv shape:
+        #     reference_adapter, candidate_adapter, scorer, corpus_item,
+        #     metric, value.
+        needed = {"sorter", "corpus_item", "stage",
+                  "scorer", "metric", "value"}
+        if needed.issubset(cdf.columns):
+            cdf = cdf[cdf["stage"] == "curated"].copy()
+            cdf["candidate_adapter"] = cdf["sorter"] + "@curated"
+            cdf["reference_adapter"] = "ground_truth"
+            cdf = cdf[["reference_adapter", "candidate_adapter",
+                        "scorer", "corpus_item", "metric", "value"]]
+            # Concat; pandas tolerates the column superset (scores.csv
+            # may carry extra columns the curated run didn't produce).
+            df = pd.concat([df, cdf], ignore_index=True)
     return df
 
 
@@ -288,8 +318,18 @@ def _print_org(piv, *, decimals: int) -> None:
                 continue
             print()
             print(f"## {primary} stages")
+            # Split pipeline-intermediate stages (fiber_session, fs_clean,
+            # exp_xcm, ...) from any post-hoc stages (today: `@curated`
+            # from `ns3sb score-curated`).  Pipeline stages render in
+            # arrival order, then `final` (the primary itself, which IS
+            # the end-of-chain sort), then any curated-style rows AFTER
+            # final — those are human-added on top of the sort.
+            pipeline_stages = [s for s in stage_names
+                                if not s.endswith("@curated")]
+            curated_stages = [s for s in stage_names
+                                if s.endswith("@curated")]
             stage_rows = []
-            for full_name in stage_names:
+            for full_name in pipeline_stages:
                 row = sub.loc[full_name]
                 _, stage_tag = full_name.split("@", 1)
                 cells = [stage_tag]
@@ -297,14 +337,23 @@ def _print_org(piv, *, decimals: int) -> None:
                     cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
                 stage_rows.append(cells)
             # End-of-chain row: the primary itself, labelled with its
-            # mode-final tag (today: fiber_kit → exp_final).  Pulling
-            # from the extras would need a cross-reference; the label
+            # mode-final tag (today: fiber_kit → exp_final).  The label
             # "final" is clear enough given the section heading.
             row = sub.loc[primary]
             cells = ["final"]
             for m in metrics:
                 cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
             stage_rows.append(cells)
+            # Curated row(s) AFTER final — curation happens on top of the
+            # final sort, so rendering them earlier would read as if the
+            # curator ran mid-pipeline.
+            for full_name in curated_stages:
+                row = sub.loc[full_name]
+                _, stage_tag = full_name.split("@", 1)
+                cells = [stage_tag]
+                for m in metrics:
+                    cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
+                stage_rows.append(cells)
             print(_org_table(headers_stages, stage_rows, numeric_mask))
 
         # Orphan stage groups: stage rows whose primary isn't in this
