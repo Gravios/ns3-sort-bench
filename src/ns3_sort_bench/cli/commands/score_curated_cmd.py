@@ -313,4 +313,7 @@ def register(subparsers) -> None:
     ap.add_argument("--require-curated", action="store_true",
                     help="warn when a (sorter, item) has no curated .clu "
                          "(default: silently skip)")
-    ap.set_defaults(func=run)
+    # Harness dispatcher reads `args.fn`; match the convention every
+    # other command uses.  Historical `func=run` here never fired —
+    # `main` raised AttributeError on `args.fn`.
+    ap.set_defaults(fn=run)
