@@ -14,7 +14,7 @@ trace.
 | Paired recordings (doc page) | a juxtacellular trace (orange, large positive spikes) over an extracellular one (white, small troughs), cyan links joining matched spikes | `paired-recordings.svg` |
 | Adapter contracts (doc page) | a spec sheet with a tick | `contracts.svg` |
 | Installation (doc page) | a download arrow into a tray | `install.svg` |
-| Klusters (banner chip) | copied from neurosuite-3 `src/klusters/src/app-klusters.svg` | `klusters.svg` |
+| Compare (banner chip) | a confusion matrix: the diagonal solid in cyan / white / orange, a little leakage off it | `comparison.svg` |
 | neurosuite-3 (banner kicker) | copied from neurosuite-3 `doc/images/neurosuite-3.svg` | `neurosuite-3.svg` |
 
 Palette: tile gradient `#0E2236` → `#173F5C`, cyan `#43C8E2`, white

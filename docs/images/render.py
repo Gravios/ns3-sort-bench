@@ -77,7 +77,7 @@ def banner() -> str:                      # 2560 × 800, like neurosuite-3's
         f'<div style="width:108px;height:108px;margin-right:30px">{svg(n)}</div>'
         f'<span style="font-size:50px">{label}</span></div>'
         for n, label in (("sorters", "Sorters"), ("ground-truth", "Ground truth"),
-                         ("klusters", "Klusters")))
+                         ("comparison", "Compare")))
     body = (
         f'<svg style="position:absolute;left:0;top:0" width="{w}" height="{h}">'
         f'{trace(w, 672, 1520)}</svg>'
