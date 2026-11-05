@@ -527,8 +527,12 @@ def test_stage_method_flags_names_each_chain_stage_correctly():
     )
     flags = _stage_method_flags("standard")
 
-    # Every stage the full-chain mode runs must be covered.
-    for stage in _FiberKitBase._MODE_STAGES["fiber_kit"]:
+    # Every stage the legacy full-chain mode runs must be covered.
+    # (`fiber_kit` runs through the fiber-pipeline driver and does NOT use
+    # _stage_method_flags at all — the embedded plan's per-step `params:`
+    # already pick the right flags; we only inject a global --method on
+    # the driver command line.)
+    for stage in _FiberKitBase._MODE_STAGES["fiber_kit_no_deconv"]:
         assert stage in flags, f"missing stage {stage!r} in _stage_method_flags"
 
     # Spot-check each stage's flag matches its argparse signature + the
@@ -574,7 +578,12 @@ def test_full_chain_order_has_cpos_between_refine_and_link():
     """
     from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
 
-    for mode in ("fiber_kit", "fiber_kit_no_deconv"):
+    # fiber_kit now dispatches via fiber-pipeline + embedded plan; stage
+    # order inside that plan is pinned by the yaml itself and the
+    # fiber-pipeline driver, not by this list.  So only fiber_kit_no_deconv,
+    # which still runs the legacy per-stage chain here, needs the order
+    # pin.
+    for mode in ("fiber_kit_no_deconv",):
         stages = _FiberKitBase._MODE_STAGES[mode]
         assert "fiber-cpos" in stages, f"{mode}: no fiber-cpos in chain"
         assert "fiber-link" in stages, f"{mode}: no fiber-link in chain"
@@ -602,7 +611,11 @@ def test_full_chain_final_tag_matches_link_output_stage():
     from ns3_sort_bench.adapters.fiber_kit import (
         _FiberKitBase, _stage_method_flags,
     )
-    for mode in ("fiber_kit", "fiber_kit_no_deconv"):
+    # fiber_kit emits exp_final from fiber-consensus(review) (the embedded
+    # plan's last `out:`); its final tag has nothing to do with
+    # fiber-link's output stage.  Keep this pin focused on the legacy
+    # per-stage chain, which still drives fiber_kit_no_deconv.
+    for mode in ("fiber_kit_no_deconv",):
         final = _FiberKitBase._MODE_FINAL_TAG[mode]
         link_flags = _stage_method_flags("standard")["fiber-link"]
         # No explicit --clu-stage / --cpos-stage means fiber-link defaults
@@ -615,6 +628,30 @@ def test_full_chain_final_tag_matches_link_output_stage():
             f"_MODE_FINAL_TAG[{mode!r}] = {final!r}, "
             "but the wiring produces refine_linked"
         )
+
+
+def test_fiber_kit_mode_dispatches_through_fiber_pipeline():
+    """`fiber_kit` mode must dispatch via the `fiber-pipeline` bash driver
+    (which reads the 9-step `pipeline:` block embedded in
+    configs/fiber_kit.yaml), NOT iterate the legacy per-stage chain.
+
+    If this ever regresses to [fiber-session, fiber-realign, ...], the
+    embedded plan — the whole point of porting the user's preferred yaml
+    — stops running, and fiber_kit silently reverts to the old chain.
+    Guard that.
+    """
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    stages = _FiberKitBase._MODE_STAGES["fiber_kit"]
+    assert stages == ["fiber-pipeline"], (
+        f"_MODE_STAGES['fiber_kit'] = {stages!r}; should be "
+        "['fiber-pipeline'] (dispatches the embedded `pipeline:` block via "
+        "fiber-kit's bash driver)."
+    )
+    final = _FiberKitBase._MODE_FINAL_TAG["fiber_kit"]
+    assert final == "exp_final", (
+        f"_MODE_FINAL_TAG['fiber_kit'] = {final!r}; the embedded plan's "
+        "last `out:` tag (from fiber-consensus(review)) is 'exp_final'."
+    )
 
 
 def test_fiber_kit_config_sets_pca_to_python_port_shape():
@@ -716,6 +753,89 @@ def test_write_fk_config_falls_back_to_cwd_fiber_kit_yaml(tmp_path, monkeypatch)
     assert parsed["FK_RDR_MIN_AMP"] == 3.14
     # Baseline still present for keys the user didn't set
     assert parsed["FK_SESSION_REALIGN"] == "off"
+
+
+def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
+    """When _USES_FIBER_PIPELINE is true, the merged fiber-kit.yaml MUST
+    carry the embedded `pipeline:` block + the whole flat FK_* map from
+    configs/fiber_kit.yaml — fiber-pipeline reads both.  A reversion
+    that narrowed the baseline back to `{FK_SESSION_REALIGN: off}` would
+    silently fall back to the default canonical plan (fiber-session →
+    ... → fiber-link) and skip the user's 9-step pipeline entirely.
+    """
+    import os, yaml
+    orig = os.environ.pop("FK_CONFIG", None)
+    try:
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+
+        # Subclass that opts into the full baseline, matching _Full
+        # (fiber_kit mode).
+        class _P(_FiberKitBase):
+            _USES_FIBER_PIPELINE = True
+
+        out_dir = tmp_path / "session"
+        out_dir.mkdir()
+        # cwd a clean dir so ./fiber-kit.yaml doesn't exist
+        cwd_before = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            path = _P._write_fk_config(str(out_dir))
+        finally:
+            os.chdir(cwd_before)
+    finally:
+        if orig is not None:
+            os.environ["FK_CONFIG"] = orig
+
+    parsed = yaml.safe_load(Path(path).read_text())
+    # Embedded plan survives the write.
+    assert "pipeline" in parsed, (
+        "fiber-pipeline mode merged yaml lost the `pipeline:` block — "
+        "fiber-pipeline will fall back to the canonical plan instead."
+    )
+    stages = [step["stage"] for step in parsed["pipeline"]]
+    assert "fiber-flag-artifacts" in stages
+    assert "fiber-consensus"     in stages
+    assert "fiber-anchor-link"   in stages
+    # Final-output step (fiber-consensus review) is still present, and
+    # its out tag is `exp_final` — which _MODE_FINAL_TAG also pins.
+    out_tags = [step.get("out") for step in parsed["pipeline"]]
+    assert "exp_final" in out_tags
+    # Flat FK_* tuning is also present — spot-check one from the file.
+    assert "FK_SESSION_CHUNK_MIN" in parsed
+    # fiber-pipeline mode takes FK_SESSION_REALIGN from the full yaml
+    # (where the user set `auto`), NOT the minimal baseline's `off`.
+    # The embedded plan has its own fiber-realign steps, so the
+    # session-end auto-realign can follow the user's intent.
+    assert parsed["FK_SESSION_REALIGN"] == "auto"
+
+
+def test_write_fk_config_legacy_mode_stays_minimal(tmp_path):
+    """The legacy per-stage modes (fiber_kit_no_deconv, fiber_kit_session)
+    keep the minimal baseline — only FK_SESSION_REALIGN=off.  Guards
+    against accidentally shipping the full FK_* flat tuning to a legacy
+    chain whose stages set those knobs via other means.
+    """
+    import os, yaml
+    orig = os.environ.pop("FK_CONFIG", None)
+    try:
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+        out_dir = tmp_path / "session"
+        out_dir.mkdir()
+        cwd_before = os.getcwd()
+        os.chdir(str(tmp_path))
+        try:
+            path = _FiberKitBase._write_fk_config(str(out_dir))
+        finally:
+            os.chdir(cwd_before)
+    finally:
+        if orig is not None:
+            os.environ["FK_CONFIG"] = orig
+
+    parsed = yaml.safe_load(Path(path).read_text())
+    # No pipeline: block for the legacy chain.
+    assert "pipeline" not in parsed
+    # Minimal baseline — load-bearing default pinned, no bulk FK_* keys.
+    assert parsed.get("FK_SESSION_REALIGN") == "off"
 
 
 def test_write_fk_config_tolerates_broken_user_yaml(tmp_path):

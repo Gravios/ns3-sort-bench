@@ -288,7 +288,38 @@ _NDM_PCA_DEFAULTS = _cfg_section("ndm_pca", {"method": "standard"})
 # Baseline FK_* overrides written into the per-session fiber-kit.yaml.
 # When the user has their own `./fiber-kit.yaml` (or passes `fk_config_path`),
 # their keys are merged in and win — this baseline fills the gaps.
+#
+# Minimal baseline (legacy per-stage modes: fiber_kit_no_deconv,
+# fiber_kit_session).  Just the `fiber_kit:` structured section from
+# configs/fiber_kit.yaml, holding FK_SESSION_REALIGN=off.
 _FK_SESSION_BASELINE = _cfg_section("fiber_kit", {"FK_SESSION_REALIGN": "off"})
+
+
+def _fk_pipeline_cfg_baseline() -> dict:
+    """Full baseline for fiber_kit mode — dispatched through the
+    `fiber-pipeline` driver.  Returns the ENTIRE top-level of
+    configs/fiber_kit.yaml (every flat FK_* key plus the embedded
+    `pipeline:` block) MINUS the structured ns3sb sections (ndm_detect /
+    ndm_extract / ndm_pca / fiber_kit) that fiber-pipeline would warn on
+    and skip.
+
+    The `fiber_kit:` structured section's own keys (e.g.
+    FK_SESSION_REALIGN) are promoted to flat FK_* keys in the baseline so
+    their load-bearing defaults survive the ns3sb → fiber-pipeline hop.
+    """
+    _NS3_ONLY = {"ndm_detect", "ndm_extract", "ndm_pca", "fiber_kit"}
+    base: dict = {k: v for k, v in _FK_CFG.items() if k not in _NS3_ONLY}
+    # Promote the structured `fiber_kit:` keys back to flat FK_* keys
+    # (they live at the top of configs/fiber_kit.yaml only because that
+    # section carries the ns3sb-side adapter schema).
+    fk_section = _FK_CFG.get("fiber_kit")
+    if isinstance(fk_section, Mapping):
+        for k, v in fk_section.items():
+            base.setdefault(k, v)
+    return base
+
+
+_FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
 
 
 def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
@@ -634,9 +665,18 @@ class _FiberKitBase(SorterAdapter):
     # fiber-cpos produces (fiber-link has NO on-the-fly localizer
     # fallback, unlike fiber-intrachunk which does).
     _MODE_STAGES = {
-        "fiber_kit": ["fiber-session", "fiber-realign", "fiber-refine",
-                      "fiber-cpos",
-                      "fiber-peel", "fiber-intrachunk", "fiber-link"],
+        # `fiber_kit` mode runs the user's preferred 9-step plan embedded as
+        # `pipeline:` in configs/fiber_kit.yaml — fiber-flag-artifacts →
+        # session → realign → consensus(clean) → cpos → anchor-link → realign
+        # → consensus(review) → rdr.  We don't orchestrate those stages
+        # ourselves; the `fiber-pipeline` bash driver (installed with
+        # fiber-kit) reads the embedded plan from $FK_CONFIG and dispatches
+        # each step with the right flags.  The lone "fiber-pipeline"
+        # sentinel below tells _run_stage to use that driver instead of the
+        # per-stage invocation that fiber_kit_no_deconv still uses.
+        "fiber_kit": ["fiber-pipeline"],
+        # fiber_kit_no_deconv stays on the legacy per-stage chain: the
+        # user explicitly asked to keep it as is.
         "fiber_kit_no_deconv": ["fiber-session", "fiber-realign", "fiber-refine",
                                  "fiber-cpos",
                                  "fiber-peel", "fiber-intrachunk", "fiber-link"],
@@ -646,24 +686,40 @@ class _FiberKitBase(SorterAdapter):
     # Default `.clu.<variant>.<group>.<tag>` tag written by the LAST stage of
     # each mode's chain.
     #   fiber-session mode: fiber-session writes tag `fiber_session`.
-    #   full chains:        fiber-link's default --out-stage is
-    #                       "<clu-stage>_linked"; with cpos-stage=refine
-    #                       (fiber-cpos's output), that resolves to
-    #                       "refine_linked".
+    #   fiber_kit (pipeline): the last step in the embedded plan whose
+    #                       `out:` is set is fiber-consensus(review),
+    #                       which writes `exp_final` — the full-chain
+    #                       output the harness scores by default.
+    #   fiber_kit_no_deconv: legacy per-stage chain; fiber-link's default
+    #                       --out-stage is "<clu-stage>_linked"; with
+    #                       cpos-stage=refine (fiber-cpos's output), that
+    #                       resolves to "refine_linked".
     _MODE_FINAL_TAG = {
-        "fiber_kit":            "refine_linked",
+        "fiber_kit":            "exp_final",
         "fiber_kit_no_deconv":  "refine_linked",
         "fiber_kit_session":    "fiber_session",
     }
 
-    @staticmethod
-    def _write_fk_config(tmp_dir: str,
+    # Modes that dispatch through the `fiber-pipeline` bash driver (which
+    # reads configs/fiber_kit.yaml's embedded `pipeline:` block + every
+    # flat FK_* tuning knob) need the FULL baseline, not just the minimal
+    # `fiber_kit:` section.  Every other mode runs the legacy per-stage
+    # chain and consumes FK_* env vars at stage boundaries, where the
+    # minimal baseline is enough.
+    _USES_FIBER_PIPELINE: bool = False
+
+    @classmethod
+    def _write_fk_config(cls, tmp_dir: str,
                           user_cfg_path: Optional[str] = None) -> str:
         """Write a per-session `fiber-kit.yaml` into `tmp_dir` and return
         its path.  The file is the MERGE of two sources:
 
-          1. ``configs/fiber_kit.yaml`` → ``fiber_kit:`` baseline
-             (``_FK_SESSION_BASELINE``).  Load-bearing default:
+          1. ``configs/fiber_kit.yaml`` baseline — either
+             ``_FK_SESSION_BASELINE`` (legacy per-stage modes) or
+             ``_FK_PIPELINE_BASELINE`` (fiber_kit mode, i.e. dispatch via
+             fiber-pipeline — then the whole FK_* flat map + the embedded
+             `pipeline:` block carry over so the driver sees the complete
+             tuning + plan).  Load-bearing default in both:
              ``FK_SESSION_REALIGN: "off"``, because the end-of-run realign
              refuses to work on raw waveforms when its token asks for
              stderiv — we have no ``.spk.stderiv.<g>``.
@@ -683,7 +739,9 @@ class _FiberKitBase(SorterAdapter):
         merge undoes.
         """
         import yaml as _yaml
-        merged: dict = dict(_FK_SESSION_BASELINE)
+        baseline = (_FK_PIPELINE_BASELINE if cls._USES_FIBER_PIPELINE
+                    else _FK_SESSION_BASELINE)
+        merged: dict = dict(baseline)
 
         user_path = (user_cfg_path
                       or os.environ.get("FK_CONFIG")
@@ -734,6 +792,15 @@ class _FiberKitBase(SorterAdapter):
             for k, v in merged.items():
                 if str(k).startswith("#"):
                     f.write(f"{k}: {v}\n")
+                    continue
+                # fiber-pipeline's embedded `pipeline:` block is a list of
+                # dicts; our flat scalar emitter can't represent it, and
+                # fiber-pipeline SPECIALLY-cases this one non-FK_ key in
+                # its config reader.  Fall back to yaml.safe_dump for
+                # non-scalar values (today: just `pipeline:`).
+                if isinstance(v, (list, dict)):
+                    f.write(_yaml.safe_dump({k: v}, sort_keys=False,
+                                             default_flow_style=None))
                     continue
                 f.write(f"{k}: {_emit(v)}\n")
         return path
@@ -1002,8 +1069,28 @@ class _FiberKitBase(SorterAdapter):
         return base
 
     def _run_stage(self, stage, sess_base, group, *, env, extra_args):
-        cmd = [stage, sess_base, str(group), *list(extra_args)]
-        log_path = f"{sess_base}.{stage}.log"
+        if stage == "fiber-pipeline":
+            # fiber-pipeline <elec> is the bash driver: takes the group as
+            # its ONE positional arg, resolves the session from FK_DIR +
+            # FK_SESS in env, and reads the embedded `pipeline:` block
+            # from $FK_CONFIG — we already point FK_CONFIG at the merged
+            # yaml in _materialise_recording.  --method tells every stage
+            # which .spk/.clu variant to compose; since we auto-materialise
+            # a `standard` .spk only, that's the tag we ship.  (If no
+            # --method is given, fiber-pipeline falls back to inspecting
+            # the .spk files on disk, which would resolve the same way,
+            # but we pass it explicitly so the dispatch is self-describing
+            # in the log file.)
+            sess_dir, sess_name = os.path.split(sess_base)
+            env = dict(env)
+            env.setdefault("FK_DIR",  sess_dir or ".")
+            env.setdefault("FK_SESS", sess_name)
+            cmd = ["fiber-pipeline", str(group),
+                   "--method", _NS3_METHOD, *list(extra_args)]
+            log_path = f"{sess_base}.fiber-pipeline.log"
+        else:
+            cmd = [stage, sess_base, str(group), *list(extra_args)]
+            log_path = f"{sess_base}.{stage}.log"
         with open(log_path, "w") as logf:
             r = subprocess.run(cmd, env=env, stdout=logf,
                                 stderr=subprocess.STDOUT, check=False)
@@ -1016,6 +1103,9 @@ class _Full(_FiberKitBase):
     name = "fiber_kit"; _mode = "fiber_kit"
     _env_overrides = {"FK_SESSION_DECONV": "1"}
     _contract_obj = _contract_for("fiber_kit", with_deconv=True)
+    # Dispatch via the fiber-pipeline bash driver → _write_fk_config
+    # ships the full baseline (pipeline: + every flat FK_*).
+    _USES_FIBER_PIPELINE = True
 
 
 class _NoDeconv(_FiberKitBase):
