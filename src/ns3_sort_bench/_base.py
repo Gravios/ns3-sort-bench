@@ -310,6 +310,41 @@ class BenchmarkRun:
                     except Exception as e:
                         self._log(f"    scorer {scorer.name} FAILED: {type(e).__name__}: {e}")
 
+                # Multi-stage results: an adapter may attach additional
+                # SortedResults for scoreable intermediate sort stages via
+                # `extras["stage_results"]` (dict of {stage_tag → SortedResult})
+                # — today fiber_kit does this for the 9-step pipeline's
+                # fiber_session / fs_clean / exp_xcm intermediates.  Each
+                # one scores like a distinct adapter with name
+                # "<adapter>@<stage_tag>", feeds into the same rows and
+                # klusters export, but shares the parent's corpus_item.
+                stage_results = (candidate.extras.get("stage_results")
+                                  if isinstance(candidate.extras, Mapping)
+                                  else None) or {}
+                for stage_tag, stage_result in stage_results.items():
+                    stage_name = f"{adapter.name}@{stage_tag}"
+                    stage_result = SortedResult(**{
+                        **_as_dict(stage_result),
+                        "corpus_item": corpus.name,
+                        # Intermediate stages inherit the parent sort's
+                        # wall time: they were written as side effects of
+                        # one fiber-pipeline run, not timed separately.
+                        "wall_time_s": candidate.wall_time_s,
+                        "peak_rss_mb": candidate.peak_rss_mb,
+                    })
+                    sort_summaries.append(stage_result.to_meta())
+                    self._log(f"    stage {stage_tag}: "
+                              f"{stage_result.n_units()} units, "
+                              f"{stage_result.n_spikes():,} spikes")
+                    candidates_for_corpus[stage_name] = stage_result
+                    for scorer in self.scorers:
+                        try:
+                            rows.extend(scorer(ref, stage_result).to_rows())
+                        except Exception as e:
+                            self._log(f"    stage {stage_tag} scorer "
+                                      f"{scorer.name} FAILED: "
+                                      f"{type(e).__name__}: {e}")
+
             # End of adapter loop for THIS corpus.  Write per-adapter Klusters
             # sessions (via neurosuite-3's ndm_* binaries) when requested.
             if self.export_klusters and candidates_for_corpus:

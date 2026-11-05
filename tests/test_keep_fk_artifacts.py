@@ -192,3 +192,84 @@ def test_run_cmd_sets_fk_artifacts_dir_from_plan(tmp_path, monkeypatch):
     assert captured.get("adapter_kwargs", {}).get("fk_artifacts_dir", "").endswith(
         "/fiber_kit"
     )
+
+
+# ─── harness: multi-stage scoring via extras["stage_results"] ───────────────
+class _MultiStageAdapter:
+    """Fake adapter that emits two scoreable intermediate stages alongside
+    its primary SortedResult, via extras["stage_results"]."""
+    name = "fake_ms"
+    version = "0.0"
+    contract = None
+
+    def __init__(self):
+        self.calls = []
+
+    def available(self):
+        return True, ""
+
+    def sort(self, recording, *, ns3_yaml=None, **kwargs):
+        from ns3_sort_bench._base import SortedResult
+        self.calls.append(kwargs)
+        stage_A = SortedResult(
+            unit_ids=[2], spike_times={2: np.asarray([10, 20], np.int64)},
+            sampling_rate=20000.0,
+            adapter=f"{self.name}@stageA",
+            corpus_item="PLACEHOLDER",
+        )
+        stage_B = SortedResult(
+            unit_ids=[2, 3],
+            spike_times={2: np.asarray([10], np.int64),
+                         3: np.asarray([20, 30], np.int64)},
+            sampling_rate=20000.0,
+            adapter=f"{self.name}@stageB",
+            corpus_item="PLACEHOLDER",
+        )
+        return SortedResult(
+            unit_ids=[2], spike_times={2: np.asarray([10, 20, 30], np.int64)},
+            sampling_rate=20000.0,
+            adapter=self.name, corpus_item="PLACEHOLDER",
+            extras={"stage_results": {"stageA": stage_A, "stageB": stage_B}},
+        )
+
+
+def test_benchmarkrun_scores_each_stage_result(tmp_path):
+    """When an adapter emits extras["stage_results"] = {tag: SortedResult},
+    the harness must score each stage alongside the primary candidate,
+    with adapter label `<adapter>@<tag>`.  Stage rows share the same
+    corpus_item as the primary (the authoritative corpus.name).
+    """
+    from ns3_sort_bench._base import BenchmarkRun
+    from ns3_sort_bench.scorers.pairwise import PairwiseScorer
+    adapter = _MultiStageAdapter()
+    bench = BenchmarkRun(output_dir=str(tmp_path), verbose=False)
+    bench.add_corpus(_make_corpus("MS_ITEM"))
+    bench.add_adapter(adapter)
+    bench.add_scorer(PairwiseScorer())
+    df = bench.go()
+
+    adapters = set(df["candidate_adapter"].astype(str).tolist()) if "candidate_adapter" in df.columns else set()
+    # Primary + both stages must each appear in at least one scored row.
+    assert "fake_ms"        in adapters
+    assert "fake_ms@stageA" in adapters
+    assert "fake_ms@stageB" in adapters
+    # Every row's corpus_item is the corpus's authoritative name, including
+    # the stage rows (which inherited from the primary).
+    assert set(df["corpus_item"].astype(str).tolist()) == {"MS_ITEM"}
+
+
+def test_benchmarkrun_handles_missing_stage_results(tmp_path):
+    """Adapters without extras["stage_results"] (today: every one except
+    fiber_kit in pipeline mode) must still work — the stage loop is a
+    no-op and only the primary row is emitted.
+    """
+    from ns3_sort_bench._base import BenchmarkRun
+    from ns3_sort_bench.scorers.pairwise import PairwiseScorer
+    adapter = _FakeAdapter()           # the single-result fake
+    bench = BenchmarkRun(output_dir=str(tmp_path), verbose=False)
+    bench.add_corpus(_make_corpus("NO_STAGES"))
+    bench.add_adapter(adapter)
+    bench.add_scorer(PairwiseScorer())
+    df = bench.go()
+    adapters = set(df["candidate_adapter"].astype(str).tolist()) if "candidate_adapter" in df.columns else set()
+    assert adapters == {"fake"}

@@ -22,7 +22,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import numpy as np
 
@@ -320,6 +320,17 @@ def _fk_pipeline_cfg_baseline() -> dict:
 
 
 _FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
+
+# Scoreable intermediate .clu tags produced along the fiber_kit mode's
+# embedded 9-step plan (configs/fiber_kit.yaml → `pipeline:`):
+#     fiber_session   — fiber-session's initial over-clustering
+#     fs_clean        — fiber-consensus (quarantine-only) pass on session
+#     exp_xcm         — fiber-anchor-link output
+#     (exp_final      — fiber-consensus review; this is the PRIMARY
+#                       readback, not re-emitted as a stage result)
+# Order mirrors the plan's step order, which is also roughly
+# precision-increasing — useful for a reader skimming the scored rows.
+_FIBER_KIT_SCOREABLE_STAGES = ("fiber_session", "fs_clean", "exp_xcm")
 
 
 def _channel_count_fk_overrides(n_channels: int) -> dict:
@@ -1004,8 +1015,30 @@ class _FiberKitBase(SorterAdapter):
         spike_times = {int(u): np.asarray(sort_ex.get_unit_spike_train(u), np.int64)
                        for u in sort_ex.get_unit_ids()}
 
+        # Multi-stage readback.  For fiber_kit mode (fiber-pipeline-dispatched)
+        # the embedded 9-step plan writes three scoreable intermediate .clu
+        # outputs along the way — fiber_session (initial over-cluster),
+        # fs_clean (after fiber-consensus quarantine), exp_xcm (after
+        # fiber-anchor-link).  The user explicitly asked to score each of
+        # them against the ground truth; we read them back here and attach
+        # the per-stage SortedResult via extras["stage_results"] so
+        # BenchmarkRun.go can score them like any other adapter output.
+        # The exp_final stage is NOT re-emitted: that's already the
+        # primary readback above, so re-scoring would just duplicate the
+        # fiber_kit row.
+        stage_results: Dict[str, "SortedResult"] = {}
+        if self._mode == "fiber_kit" and materialised:
+            for stage_tag in _FIBER_KIT_SCOREABLE_STAGES:
+                stage_result = self._readback_stage_result(
+                    sess_base, group, variant, stage_tag, recording,
+                )
+                if stage_result is not None:
+                    stage_results[stage_tag] = stage_result
+
         extras = dict(mode=self._mode, electrode_group=group,
                        variant=variant, tag=tag, session_base=sess_base)
+        if stage_results:
+            extras["stage_results"] = stage_results
         # Cleanup policy, in order of precedence:
         #   keep_artifacts (set when the harness passed fk_artifacts_dir)  → always keep
         #   preserve_outputs=True kwarg                                     → always keep
@@ -1156,6 +1189,52 @@ class _FiberKitBase(SorterAdapter):
         if r.returncode != 0:
             tail = open(log_path).read()[-2000:]
             raise RuntimeError(f"{stage} failed (exit {r.returncode}); log tail:\n{tail}")
+
+    def _readback_stage_result(self, sess_base: str, group: int,
+                                variant: str, stage_tag: str,
+                                recording) -> Optional["SortedResult"]:
+        """Read back the `.clu.<variant>.<group>.<stage_tag>` file an
+        intermediate plan step wrote, return it as a SortedResult tagged
+        with adapter=`<mode>@<stage_tag>`, or None if the file isn't
+        present.
+
+        Absent files are not an error — fiber-pipeline's steps are
+        conditional on earlier ones producing a .clu with their own `in:`
+        tag, and the user may run a plan that skips some of them.  The
+        caller just omits the missing stage from stage_results.
+        """
+        from ..ns3.extractors import NS3SortingExtractor
+        clu_path = _klusters_path(sess_base, "clu", group) + f".{stage_tag}"
+        if not os.path.isfile(clu_path):
+            return None
+        try:
+            sort_ex = NS3SortingExtractor(
+                sess_base + ".yaml", electrode_group=group,
+                variant=variant, tag=stage_tag,
+            )
+            st = {int(u): np.asarray(sort_ex.get_unit_spike_train(u),
+                                       np.int64)
+                  for u in sort_ex.get_unit_ids()}
+        except Exception:
+            # A malformed intermediate .clu shouldn't kill the whole sort —
+            # the primary result already returned fine.  Drop this stage.
+            return None
+        return SortedResult(
+            unit_ids=sorted(st), spike_times=st,
+            sampling_rate=recording.get_sampling_frequency(),
+            adapter=f"{self._mode}@{stage_tag}",
+            corpus_item=sess_base,          # overridden by BenchmarkRun.go
+            adapter_version=self._version,
+            channels=list(recording.get_channel_ids()),
+            # Intermediate .clu files don't have their own wall-time —
+            # they were written as side effects of the single
+            # fiber-pipeline invocation.  Leave at 0 so a reader doesn't
+            # misread the stage row as a separately-timed run.
+            wall_time_s=0.0, peak_rss_mb=0.0,
+            extras=dict(mode=self._mode, stage_tag=stage_tag,
+                         electrode_group=group, variant=variant,
+                         session_base=sess_base),
+        )
 
 
 class _Full(_FiberKitBase):

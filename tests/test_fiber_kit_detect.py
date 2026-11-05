@@ -755,6 +755,48 @@ def test_write_fk_config_falls_back_to_cwd_fiber_kit_yaml(tmp_path, monkeypatch)
     assert parsed["FK_SESSION_REALIGN"] == "off"
 
 
+def test_fiber_kit_scoreable_stages_cover_the_plans_intermediates():
+    """`_FIBER_KIT_SCOREABLE_STAGES` is the set of intermediate `out:`
+    tags from the embedded pipeline that ns3sb reads back as separate
+    SortedResults for scoring.  It must:
+
+      * cover every `out:` tag the embedded `pipeline:` writes EXCEPT
+        exp_final (that's the primary readback, re-emitting it would
+        duplicate the fiber_kit row);
+      * preserve the plan's precision-increasing step order
+        (fiber_session → fs_clean → exp_xcm) so the scored rows read
+        naturally.
+    """
+    from ns3_sort_bench.adapters.fiber_kit import _FIBER_KIT_SCOREABLE_STAGES
+    import yaml
+    from pathlib import Path
+    cfg_text = (Path(__file__).resolve().parent.parent
+                / "src" / "ns3_sort_bench" / "configs"
+                / "fiber_kit.yaml").read_text()
+    cfg = yaml.safe_load(cfg_text)
+    out_tags_in_plan = [step.get("out") for step in cfg.get("pipeline", [])]
+    # fiber-pipeline step tags present in the actual plan.
+    plan_outs = [t for t in out_tags_in_plan if t]
+    # Every scoreable stage comes from an `out:` in the plan.
+    for stage in _FIBER_KIT_SCOREABLE_STAGES:
+        assert stage in plan_outs, (
+            f"{stage!r} isn't an `out:` in the embedded plan; "
+            "the readback would hit a missing .clu file."
+        )
+    # exp_final (the primary) is deliberately NOT a separate stage.
+    assert "exp_final" not in _FIBER_KIT_SCOREABLE_STAGES, (
+        "exp_final is the fiber_kit primary readback; emitting it as a "
+        "stage result duplicates the fiber_kit row in scored output."
+    )
+    # Order mirrors the plan.
+    plan_order = {tag: i for i, tag in enumerate(plan_outs)}
+    stage_order = [plan_order[s] for s in _FIBER_KIT_SCOREABLE_STAGES]
+    assert stage_order == sorted(stage_order), (
+        f"_FIBER_KIT_SCOREABLE_STAGES = {_FIBER_KIT_SCOREABLE_STAGES}, "
+        "but plan writes them in a different order."
+    )
+
+
 def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
     """When _USES_FIBER_PIPELINE is true, the merged fiber-kit.yaml MUST
     carry the embedded `pipeline:` block + the whole flat FK_* map from
