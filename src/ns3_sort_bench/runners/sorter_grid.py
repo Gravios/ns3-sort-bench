@@ -35,7 +35,11 @@ def default_run(corpus_names, adapters=None, scorers=None,
     bench = BenchmarkRun(output_dir=output_dir)
 
     for name in corpus_names:
-        bench.add_corpus(_resolve_corpus(name))
+        # A bare study-set key (e.g. ``paired_english``) fans out to every
+        # item SpikeForest lists; every other key passes through as a
+        # single-element list, so this works for both forms.
+        for key in expand_corpus_key(name):
+            bench.add_corpus(_resolve_corpus(key))
 
     # Default adapter set: everything available
     for a_name in (adapters or sorted(adapter_registry)):
@@ -60,6 +64,58 @@ _PAIRED_PREFIX_TO_LOADER = {
     "paired_monotrode":    "load_paired_monotrode",
 }
 
+# Which SpikeForest study_set each bare paired-corpus prefix enumerates
+# when the user writes the prefix alone (no `:item` tail).  Kept in
+# lock-step with _PAIRED_PREFIX_TO_LOADER; a new prefix added there
+# also needs an entry here if bare-name enumeration should work.
+_PAIRED_PREFIX_TO_STUDY_SET = {
+    "paired_crcns_hc1":    "PAIRED_CRCNS_HC1",
+    "paired_kampff":       "PAIRED_KAMPFF",
+    "paired_english":      "PAIRED_ENGLISH",
+    "paired_boyden":       "PAIRED_BOYDEN",
+    "paired_mea64c_yger":  "PAIRED_MEA64C_YGER",
+    "paired_monotrode":    "PAIRED_MONOTRODE",
+}
+
+
+def expand_corpus_key(name: str) -> list[str]:
+    """Expand a corpus key into one or more concrete `_resolve_corpus`
+    keys.  Shape stays `list[str]` so the caller can use a flat `for
+    key in expanded: _resolve_corpus(key)` loop.
+
+    Rules:
+      * A bare paired-set prefix (no `:`) — e.g. ``paired_english`` —
+        expands to ``paired_english:<item>`` for every item SpikeForest
+        reports in that study_set.  Items are discovered lazily by
+        ``corpus.spikeforest.list_recordings`` (requires kachery-cloud
+        credentials; fails with the same error the per-item load path
+        gives).  Ordering follows SpikeForest's own listing.
+      * Every other key passes through unchanged — ``propper_sim``,
+        ``lab:...``, ``spikeforest:<study>:<rec>``, explicit
+        ``paired_english:<item>``, and any future prefix all behave
+        the same as before.
+
+    The ``inspect`` command bypasses this helper and still takes a
+    single key, because inspecting "all of PAIRED_ENGLISH" would be
+    ambiguous — it picks one recording and summarises it.  Point users
+    at ``python -m ns3_sort_bench.corpus.spikeforest list`` for the
+    full item list.
+    """
+    # Bare study-set name (no colon anywhere).
+    if ":" not in name and name in _PAIRED_PREFIX_TO_STUDY_SET:
+        study_set = _PAIRED_PREFIX_TO_STUDY_SET[name]
+        from ..corpus.spikeforest import list_recordings
+        rows = list_recordings(study_set=study_set)
+        if not rows:
+            raise RuntimeError(
+                f"no recordings found for study_set={study_set!r} — "
+                "check kachery-cloud auth, or list with `python -m "
+                "ns3_sort_bench.corpus.spikeforest list "
+                f"--study-set {study_set}`."
+            )
+        return [f"{name}:{r['study_name']}" for r in rows]
+    return [name]
+
 
 def _resolve_corpus(name: str):
     """Hard-coded corpus registry.  Keeps the CLI self-contained; extend as
@@ -68,8 +124,14 @@ def _resolve_corpus(name: str):
 
     Supported keys:
         propper_sim[_tiny|_medium]      — Propper 2015 overlap simulator
-        paired_<lab>:<item>             — SpikeForest paired recordings, e.g.
-                                          'paired_crcns_hc1:d533101'
+        paired_<lab>                    — SpikeForest paired recordings, every
+                                          item in the study set (expanded by
+                                          `expand_corpus_key`); e.g.
+                                          'paired_english', 'paired_kampff'.
+                                          Each item then resolves through this
+                                          same function as paired_<lab>:<item>.
+        paired_<lab>:<item>             — SpikeForest paired recordings, one
+                                          item; e.g. 'paired_crcns_hc1:d533101'
         spikeforest:<study>:<recording> — any SpikeForest item by full id
         lab:<yaml>[:<group>[:<variant>:<tag>]]
                                         — lab session + curated GT, e.g.
@@ -128,7 +190,7 @@ def _resolve_corpus(name: str):
         "  known prefixes: propper_sim[_tiny|_medium], "
         "spikeforest:<study>:<recording>, "
         "lab:<yaml>[:<group>[:<variant>:<tag>]], " + ", ".join(
-            p + ":<item>" for p in _PAIRED_PREFIX_TO_LOADER
+            p + "[:<item>]" for p in _PAIRED_PREFIX_TO_LOADER
         )
     )
 

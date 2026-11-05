@@ -82,13 +82,20 @@ def cmd_run(args) -> int:
                           adapter_kwargs=adapter_kwargs,
                           export_klusters=export_klusters)
 
+    from ...runners.sorter_grid import expand_corpus_key
     for key in corpus_keys:
         try:
-            c = _resolve_corpus(key)
-        except KeyError as e:
-            eprint(str(e))
+            expanded = expand_corpus_key(key)
+        except Exception as e:
+            eprint(f"{type(e).__name__}: {e}")
             return 1
-        bench.add_corpus(c)
+        for sub_key in expanded:
+            try:
+                c = _resolve_corpus(sub_key)
+            except KeyError as e:
+                eprint(str(e))
+                return 1
+            bench.add_corpus(c)
 
     for name in adapter_names:
         bench.add_adapter(adapter_registry[name])
