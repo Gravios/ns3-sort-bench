@@ -469,30 +469,60 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
     )
 
 
-# ─── per-stage method-token argparse flags ───────────────────────────────────
+# ─── per-stage method-token + input-clu argparse flags ──────────────────────
 # Each fiber-kit stage names the method token under a DIFFERENT argparse
-# flag, cross-checked against src/fiber_kit/fiber_<stage>.py's argparse
-# (stated inline so a reviewer doesn't have to open fiber-kit to audit):
+# flag, AND the later stages need to know where the previous stage's .clu
+# landed.  Cross-checked against src/fiber_kit/fiber_<stage>.py:
 #
-#   fiber-session      --method <m>           (extraction method tag)
-#   fiber-realign      --variant <m>          (input variant to realign)
-#   fiber-refine       --out-method <m>       (writes <m>_refine)
-#   fiber-peel         --cpos-method <m> --clu-method <m>
-#   fiber-intrachunk   --cpos-method <m> --clu-method <m>
-#   fiber-link         --cpos-method <m> --clu-method <m>
+#   fiber-session      --method <m>              extraction method tag
+#   fiber-realign      --variant <m>             input variant to realign
+#                      --clu <path>              fiber-session's output
+#                                                 (otherwise falls back to
+#                                                 the legacy UNTAGGED
+#                                                 <base>.clu.<group>, which
+#                                                 does not exist in a tagged
+#                                                 session → FileNotFoundError
+#                                                 observed on hc1_full)
+#   fiber-refine       --out-method <m>          writes <m>_refine
+#   fiber-peel         --cpos-method <m>         position features space
+#                      --clu-method <m>          input clu variant
+#                      --clu-stage fiber_session read fiber-session's .clu
+#   fiber-intrachunk   --cpos-method <m>
+#                      --clu-method <m>
+#                      --clu-stage fiber_session
+#   fiber-link         --cpos-method <m>
+#                      --clu-method <m>
+#                      --clu-stage fiber_session  → .clu.<m>.<g>.fiber_session_linked
+#                                                   (matches _MODE_FINAL_TAG)
 #
 # `_stage_method_flags(m)` builds the full table in one place; the adapter's
 # sort() runs its stage loop against it so the full chain stays argparse-
 # compatible across fiber-kit versions.  Adding a new stage: extend the dict.
+#
+# The `--clu <path>` for fiber-realign is session-specific (depends on the
+# sess_base path), so it is added separately in `sort()` after the base
+# flags from this table.
 def _stage_method_flags(method: str) -> dict[str, list[str]]:
-    """Return {stage: [flag, value, ...]} for the method token injection."""
+    """Return {stage: [flag, value, ...]} for the method token injection.
+
+    Later stages also get ``--clu-stage fiber_session`` so they read the
+    .clu.<method>.<g>.fiber_session that fiber-session wrote (default
+    cpos-stage=refine assumes a stderiv lab-session chain that doesn't
+    exist on a materialised SpikeInterface recording).  fiber-realign
+    takes an explicit ``--clu <path>`` injected at call time (see
+    `sort()`), because its fallback name is the LEGACY untagged form.
+    """
+    session_stage_tag = "fiber_session"
     return {
         "fiber-session":    ["--method", method],
         "fiber-realign":    ["--variant", method],
         "fiber-refine":     ["--out-method", method],
-        "fiber-peel":       ["--cpos-method", method, "--clu-method", method],
-        "fiber-intrachunk": ["--cpos-method", method, "--clu-method", method],
-        "fiber-link":       ["--cpos-method", method, "--clu-method", method],
+        "fiber-peel":       ["--cpos-method", method, "--clu-method", method,
+                              "--clu-stage", session_stage_tag],
+        "fiber-intrachunk": ["--cpos-method", method, "--clu-method", method,
+                              "--clu-stage", session_stage_tag],
+        "fiber-link":       ["--cpos-method", method, "--clu-method", method,
+                              "--clu-stage", session_stage_tag],
     }
 
 
@@ -709,6 +739,16 @@ class _FiberKitBase(SorterAdapter):
             for stage, flags in _stage_method_flags(_NS3_METHOD).items():
                 if stage in per_stage_args:
                     per_stage_args[stage] = flags + per_stage_args[stage]
+            # fiber-realign's default --clu is the LEGACY untagged
+            # <base>.clu.<group>, which does not exist in a method+stage-
+            # tagged session.  Point it at fiber-session's actual output.
+            if "fiber-realign" in per_stage_args:
+                fs_clu = _klusters_path(sess_base, "clu", group,
+                                           method=_NS3_METHOD)
+                fs_clu = f"{fs_clu}.fiber_session"
+                per_stage_args["fiber-realign"] = [
+                    "--clu", fs_clu, *per_stage_args["fiber-realign"]
+                ]
 
         with measure_runtime() as rt:
             for stage in self._MODE_STAGES[self._mode]:

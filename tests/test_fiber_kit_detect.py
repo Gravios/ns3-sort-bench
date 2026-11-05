@@ -475,12 +475,18 @@ def test_stage_method_flags_names_each_chain_stage_correctly():
     assert flags["fiber-session"]    == ["--method", "standard"]
     assert flags["fiber-realign"]    == ["--variant", "standard"]   # NOT --method
     assert flags["fiber-refine"]     == ["--out-method", "standard"]
+    # fiber-peel / intrachunk / link also thread --clu-stage=fiber_session
+    # so they read fiber-session's .clu instead of defaulting to
+    # cpos-stage=refine (which assumes a stderiv lab-session chain).
     assert flags["fiber-peel"]       == ["--cpos-method", "standard",
-                                          "--clu-method", "standard"]
+                                          "--clu-method", "standard",
+                                          "--clu-stage", "fiber_session"]
     assert flags["fiber-intrachunk"] == ["--cpos-method", "standard",
-                                          "--clu-method", "standard"]
+                                          "--clu-method", "standard",
+                                          "--clu-stage", "fiber_session"]
     assert flags["fiber-link"]       == ["--cpos-method", "standard",
-                                          "--clu-method", "standard"]
+                                          "--clu-method", "standard",
+                                          "--clu-stage", "fiber_session"]
 
     # `--method` never appears bare on the stages that don't accept it
     for stage in ("fiber-realign", "fiber-refine", "fiber-peel",
