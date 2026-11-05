@@ -239,6 +239,21 @@ def run(args) -> int:
         raw_clu = _find_raw_clu(sess_dir, sorter)
         cur_clu = _clu_path(base, curated_tag)
         res_p   = _res_path(base)
+        # Frozen .res snapshot written by klusters_export at sort time.
+        # Klusters' realign operations rewrite the live .res in place
+        # with new per-spike sample peaks; the raw-stage re-scoring must
+        # read the sorter's ORIGINAL times (what the sort produced),
+        # not the post-curation times.  Old exports pre-dating the
+        # snapshot don't have .res.raw — in that case we fall back to
+        # the live .res and warn once, since a rewrite there would
+        # silently bias the raw-stage numbers.
+        raw_res_p = f"{res_p}.raw"
+        if not os.path.exists(raw_res_p):
+            print(f"warn: {sess_dir}: no .res.raw snapshot; raw-stage "
+                   "scoring uses the live .res and may read Klusters-"
+                   "realigned samples.  Re-export this session to get "
+                   "a frozen snapshot.")
+            raw_res_p = res_p
 
         if raw_clu is None or not os.path.exists(res_p):
             print(f"warn: {sess_dir}: missing raw .clu or .res; skipping")
@@ -246,8 +261,11 @@ def run(args) -> int:
 
         gt = gt_by_item[item]
 
-        # Stage: raw
-        raw_sr = _load_sorted_result(raw_clu, res_p,
+        # Stage: raw — read against the FROZEN .res snapshot so Klusters'
+        # realign (if the user ran it during curation) doesn't shift the
+        # raw sort's apparent spike times under the sort it originally
+        # emitted.
+        raw_sr = _load_sorted_result(raw_clu, raw_res_p,
                                         adapter=sorter, corpus_item=item)
         for r in _score_against_gt(raw_sr, gt):
             scores_rows.append({

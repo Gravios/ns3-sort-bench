@@ -101,6 +101,63 @@ def test_find_raw_clu_falls_back_to_tagged_when_no_untagged(tmp_path):
     assert got == str(tagged)
 
 
+def test_score_curated_prefers_raw_res_snapshot_over_live_res(tmp_path):
+    """Klusters' realign operations rewrite the live .res in place with
+    new spike-peak samples.  score-curated's raw-stage scoring must
+    read the ORIGINAL sort's .res — snapshotted at export time as
+    `.res.<method>.<group>.raw` — so a curator's realign on top can't
+    silently shift the raw-stage numbers under the sort that produced
+    them.
+
+    This test seeds a klusters_<sorter>/<item>/ dir with:
+      - a live .res (post-realign values)
+      - a .res.raw snapshot (sorter's original values)
+    and asserts that _load_sorted_result applied to raw_clu returns
+    the SNAPSHOT'S times, not the live ones.
+    """
+    import numpy as np
+    from ns3_sort_bench.cli.commands.score_curated_cmd import (
+        _load_sorted_result,
+    )
+
+    sess = tmp_path / "klusters_fiber_kit" / "item1"
+    sess.mkdir(parents=True)
+    base = sess / "sim_session"
+
+    # Three spikes, two units; .clu header (1 int32) + body.
+    clu_bytes = np.asarray([2, 2, 3, 2], dtype="<i4").tobytes()
+    (base.with_suffix("").parent / "sim_session.clu.standard.1").write_bytes(
+        clu_bytes
+    )
+    # Live .res: hypothetically realigned to samples 100, 205, 303.
+    live_res = np.asarray([100, 205, 303], dtype="<i8").tobytes()
+    (base.with_suffix("").parent / "sim_session.res.standard.1").write_bytes(
+        live_res
+    )
+    # Raw snapshot: the sort's ORIGINAL samples (what score-curated
+    # must read for the raw stage).  Different numbers so the test
+    # fails if the code accidentally picks the live .res.
+    raw_res = np.asarray([97, 200, 300], dtype="<i8").tobytes()
+    (base.with_suffix("").parent / "sim_session.res.standard.1.raw").write_bytes(
+        raw_res
+    )
+
+    # Load via the same helper score-curated uses, pointing at the
+    # snapshot path (what the production code picks under the new
+    # logic).
+    raw_clu  = str(sess / "sim_session.clu.standard.1")
+    raw_resp = str(sess / "sim_session.res.standard.1.raw")
+    sr = _load_sorted_result(raw_clu, raw_resp,
+                               adapter="fiber_kit", corpus_item="item1")
+    # Cluster 2 has two spikes (rows 0 and 2) → samples 97 and 300 from
+    # the raw snapshot, NOT 100 and 303 from the live .res.
+    assert list(sr.spike_times[2]) == [97, 300], (
+        f"got {list(sr.spike_times[2])}; score-curated read the live "
+        ".res, not the raw snapshot — Klusters realign would shift "
+        "the raw-stage numbers underneath what the sort produced."
+    )
+
+
 def test_find_raw_clu_does_not_return_the_curated_sibling(tmp_path):
     """Under no circumstance may `_find_raw_clu` return the curated
     .clu — scoring raw vs curated against GT would then compare the

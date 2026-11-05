@@ -281,6 +281,17 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
         kept_peaks.tofile(f)
     _write_clu(clu_path, kept_clu)
 
+    # Frozen snapshot of the .res so score-curated can read the sorter's
+    # ORIGINAL spike times even after Klusters realign has rewritten
+    # the live .res in place during curation.  Must be a real copy, NOT
+    # a hardlink: Klusters typically opens .res with O_TRUNC + write,
+    # which mutates both names through a shared inode.  The .res is
+    # small (int64 × n_spikes, a few MB at most), so the duplicate is
+    # cheap.  The snapshot is the authoritative "what the sorter
+    # emitted" reference every raw-stage re-scoring reads from.
+    import shutil
+    shutil.copyfile(res_path, f"{res_path}.raw")
+
     # Extract waveforms + features for THIS adapter's spike times via ndm_*.
     session_yaml = base + ".yaml"
     log_dir = sess_dir
