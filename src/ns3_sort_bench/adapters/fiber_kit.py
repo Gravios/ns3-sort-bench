@@ -469,6 +469,33 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
     )
 
 
+# ─── per-stage method-token argparse flags ───────────────────────────────────
+# Each fiber-kit stage names the method token under a DIFFERENT argparse
+# flag, cross-checked against src/fiber_kit/fiber_<stage>.py's argparse
+# (stated inline so a reviewer doesn't have to open fiber-kit to audit):
+#
+#   fiber-session      --method <m>           (extraction method tag)
+#   fiber-realign      --variant <m>          (input variant to realign)
+#   fiber-refine       --out-method <m>       (writes <m>_refine)
+#   fiber-peel         --cpos-method <m> --clu-method <m>
+#   fiber-intrachunk   --cpos-method <m> --clu-method <m>
+#   fiber-link         --cpos-method <m> --clu-method <m>
+#
+# `_stage_method_flags(m)` builds the full table in one place; the adapter's
+# sort() runs its stage loop against it so the full chain stays argparse-
+# compatible across fiber-kit versions.  Adding a new stage: extend the dict.
+def _stage_method_flags(method: str) -> dict[str, list[str]]:
+    """Return {stage: [flag, value, ...]} for the method token injection."""
+    return {
+        "fiber-session":    ["--method", method],
+        "fiber-realign":    ["--variant", method],
+        "fiber-refine":     ["--out-method", method],
+        "fiber-peel":       ["--cpos-method", method, "--clu-method", method],
+        "fiber-intrachunk": ["--cpos-method", method, "--clu-method", method],
+        "fiber-link":       ["--cpos-method", method, "--clu-method", method],
+    }
+
+
 class _FiberKitBase(SorterAdapter):
     _mode: str = "fiber_kit"
     _env_overrides: dict = {}
@@ -663,18 +690,30 @@ class _FiberKitBase(SorterAdapter):
             )
             env["FK_CONFIG"] = fk_config
 
-        # Inject --method standard on auto-materialised runs so every stage
-        # resolves our raw .spk.standard.<g> / .res.standard.<g> files directly
-        # (no stderiv fallback).  Lab-session usage keeps whatever --method is
-        # baked into the extra_args / env.
-        stage_args = list(kwargs.get("extra_args", []))
+        # Inject the method token on auto-materialised runs so every stage
+        # resolves our raw .spk.standard.<g> / .res.standard.<g> files
+        # directly instead of falling back to a stderiv file that doesn't
+        # exist.  `_STAGE_METHOD_FLAGS` (module-level) names the stage-
+        # specific argparse flag each stage accepts for the method token;
+        # a single ["--method", _NS3_METHOD] at every stage breaks
+        # fiber-realign ("unrecognized arguments: --method standard" —
+        # observed on the hc1_full run).
+        #
+        # Lab-session usage keeps whatever --method is baked into
+        # extra_args / env (materialised is False — no injection).
+        base_args = list(kwargs.get("extra_args", []))
+        per_stage_args = {
+            stage: list(base_args) for stage in self._MODE_STAGES[self._mode]
+        }
         if materialised:
-            stage_args = ["--method", _NS3_METHOD, *stage_args]
+            for stage, flags in _stage_method_flags(_NS3_METHOD).items():
+                if stage in per_stage_args:
+                    per_stage_args[stage] = flags + per_stage_args[stage]
 
         with measure_runtime() as rt:
             for stage in self._MODE_STAGES[self._mode]:
                 self._run_stage(stage, sess_base, group, env=env,
-                                 extra_args=stage_args)
+                                 extra_args=per_stage_args[stage])
 
         # Readback defaults.  For a lab-session sort the user's full pipeline
         # emits `stderiv_C5_D34` / `exp_final` at the end.  For an auto-

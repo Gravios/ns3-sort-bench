@@ -453,6 +453,43 @@ def test_materialise_recording_programs_block_follows_sample_rate(tmp_path):
     assert p20["method"]          == "standard"
 
 
+def test_stage_method_flags_names_each_chain_stage_correctly():
+    """Every stage in the full fiber_kit chain has an entry in
+    `_stage_method_flags`, and each entry uses the argparse flag that
+    stage actually accepts (NOT a one-size-fits-all `--method`).
+
+    Regression for the hc1_full run that died at fiber-realign with
+    `unrecognized arguments: --method standard` — fiber-realign takes
+    `--variant`, not `--method`.
+    """
+    from ns3_sort_bench.adapters.fiber_kit import (
+        _stage_method_flags, _FiberKitBase,
+    )
+    flags = _stage_method_flags("standard")
+
+    # Every stage the full-chain mode runs must be covered.
+    for stage in _FiberKitBase._MODE_STAGES["fiber_kit"]:
+        assert stage in flags, f"missing stage {stage!r} in _stage_method_flags"
+
+    # Spot-check each stage's flag matches its argparse signature
+    assert flags["fiber-session"]    == ["--method", "standard"]
+    assert flags["fiber-realign"]    == ["--variant", "standard"]   # NOT --method
+    assert flags["fiber-refine"]     == ["--out-method", "standard"]
+    assert flags["fiber-peel"]       == ["--cpos-method", "standard",
+                                          "--clu-method", "standard"]
+    assert flags["fiber-intrachunk"] == ["--cpos-method", "standard",
+                                          "--clu-method", "standard"]
+    assert flags["fiber-link"]       == ["--cpos-method", "standard",
+                                          "--clu-method", "standard"]
+
+    # `--method` never appears bare on the stages that don't accept it
+    for stage in ("fiber-realign", "fiber-refine", "fiber-peel",
+                  "fiber-intrachunk", "fiber-link"):
+        assert "--method" not in flags[stage], (
+            f"{stage} would be invoked with --method, which it does not accept"
+        )
+
+
 def test_fiber_kit_config_sets_pca_to_python_port_shape():
     """`configs/fiber_kit.yaml` must disable varimax + extras for ndm_pca so
     the feature space matches the previous Python port's _compute_features
