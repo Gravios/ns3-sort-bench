@@ -91,7 +91,9 @@ def _write_scores(path: Path, rows):
 
 
 def test_summary_prints_pivot(tmp_path):
-    """summary on one run → pivot has every (corpus, adapter, metric)."""
+    """summary on one run → pivot has every (corpus, adapter, metric).
+    Uses --format text to inspect the raw pivot shape.
+    """
     rundir = tmp_path / "run_a"
     rundir.mkdir()
     _write_scores(rundir / "scores.csv", [
@@ -104,12 +106,75 @@ def test_summary_prints_pivot(tmp_path):
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        rc = main(["summary", str(rundir)])
+        rc = main(["summary", str(rundir), "--format", "text"])
     out = buf.getvalue()
     assert rc == 0
     assert "fiber_kit" in out and "botm_ref" in out
     assert "accuracy" in out and "f1" in out
     assert "0.9000" in out and "0.7200" in out
+
+
+def test_summary_org_table_layout(tmp_path):
+    """Default --format org: one org-style table per corpus, pipe-separated
+    header, `|---+---|` separator, short metric names, right-aligned nums.
+    """
+    rundir = tmp_path / "org_run"
+    rundir.mkdir()
+    _write_scores(rundir / "scores.csv", [
+        # Default-column-set metrics + a count column
+        ("per_cell", "sim1", "gt", "fiber_kit_session", "best_unit_accuracy_mean", 0.049),
+        ("per_cell", "sim1", "gt", "fiber_kit_session", "best_unit_recall_mean",   0.146),
+        ("per_cell", "sim1", "gt", "fiber_kit_session", "n_cand_units",            28.0),
+        ("per_cell", "sim1", "gt", "kilosort4",         "best_unit_accuracy_mean", 0.051),
+        ("per_cell", "sim1", "gt", "kilosort4",         "best_unit_recall_mean",   0.659),
+        ("per_cell", "sim1", "gt", "kilosort4",         "n_cand_units",            2.0),
+    ])
+    from ns3_sort_bench.cli.main import main
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])          # default --format org
+    out = buf.getvalue()
+    assert rc == 0
+
+    # One section header per corpus
+    assert "# sim1" in out
+
+    # Pipe-separated header + org separator (uses `+` at column joins)
+    assert "| adapter" in out
+    assert "|-" in out and "+-" in out
+
+    # Short metric aliases replace the long scores.csv names
+    assert "| iou" in out or "iou " in out
+    assert "recall" in out
+    assert "n_cand" in out
+    # Full long names must NOT appear in the org output
+    assert "best_unit_accuracy_mean" not in out
+
+    # Count columns render as ints (no "28.0000")
+    assert "28" in out
+    assert "28.0000" not in out
+    # Floats keep the --decimals width
+    assert "0.0490" in out and "0.6590" in out
+
+
+def test_summary_org_multi_corpus_prints_two_tables(tmp_path):
+    rundir = tmp_path / "org_multi"
+    rundir.mkdir()
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", "simA", "gt", "fiber_kit_session", "best_unit_accuracy_mean", 0.05),
+        ("per_cell", "simB", "gt", "fiber_kit_session", "best_unit_accuracy_mean", 0.12),
+    ])
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+    # Two separate tables with their own section headers, in sorted order
+    assert out.index("# simA") < out.index("# simB")
+    # Each corpus has its own separator row
+    assert out.count("|-") >= 2
 
 
 def test_compare_delta_and_only_regressed(tmp_path):

@@ -7,9 +7,121 @@ metric, value)`.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional, Sequence
 
 from .._util import eprint, split_csv, table
+
+
+# ─── org-style renderer ─────────────────────────────────────────────────────
+# One table per corpus, pipe-separated with an org-mode separator row:
+#
+#     | adapter            |    iou | recall |   prec | n_cand | merge_n |
+#     |--------------------+--------+--------+--------+--------+---------|
+#     | fiber_kit_session  | 0.0490 | 0.1463 | 0.0687 |     28 |       1 |
+#
+# Numeric columns right-aligned, strings left.  Readable in any terminal
+# and pastes verbatim into an Org-mode document or a Markdown-with-pipes
+# renderer; a reviewer can wrap it in `#+NAME: results` for citation.
+
+# Preferred column-name aliases — short enough to keep columns narrow
+# without losing what they measure.  Not an exhaustive renaming; metrics
+# not listed here keep their scores.csv name.
+_METRIC_ALIASES = {
+    "best_unit_accuracy_mean":    "iou",
+    "best_unit_recall_mean":      "recall",
+    "best_unit_precision_mean":   "prec",
+    "cells_ge_50":                ">=0.5",
+    "cells_ge_80":                ">=0.8",
+    "oracle_merge_accuracy_mean":    "o_iou",
+    "oracle_merge_recall_mean":      "o_recall",
+    "oracle_merge_precision_mean":   "o_prec",
+    "oracle_merge_subset_size_mean": "merge_n",
+    "n_matched_spikes":           "n_match",
+    "n_cand_units":               "n_cand",
+    "n_ref_units":                "n_ref",
+    "n_ref_cells":                "n_cells",
+    "n_ref_spikes":               "n_sp",
+}
+
+# Default column order when --metric is not given — compact, top-to-bottom
+# "what did the sort do, how well did it hit, how many units, could a
+# curator fix it, what did the matching look like".
+_DEFAULT_COLS = (
+    "best_unit_accuracy_mean",
+    "best_unit_recall_mean",
+    "best_unit_precision_mean",
+    "cells_ge_80",
+    "cells_ge_50",
+    "n_cand_units",
+    "oracle_merge_accuracy_mean",
+    "oracle_merge_subset_size_mean",
+    "ari",
+    "purity",
+    "completeness",
+    "n_matched_spikes",
+)
+
+
+def _short(name: str) -> str:
+    """Terminal-friendly name for a metric column."""
+    return _METRIC_ALIASES.get(name, name)
+
+
+def _is_count_metric(name: str) -> bool:
+    """Count-like metrics render as integers (no decimal zeros)."""
+    return (name.startswith("n_") or
+            name.endswith("_units") or name.endswith("_cells") or
+            name.endswith("_spikes") or
+            name.startswith("cells_ge_") or
+            name == "oracle_merge_subset_size_mean")
+
+
+def _fmt_cell(v, decimals: int, as_int: bool) -> str:
+    """One table cell — "—" for missing, int for count columns, else float."""
+    try:
+        import math
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return "—"
+    except Exception:
+        pass
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if as_int:
+        return f"{int(round(f))}"
+    return f"{f:.{decimals}f}"
+
+
+def _org_table(headers: Sequence[str], rows: Sequence[Sequence[str]],
+                 numeric_mask: Sequence[bool]) -> str:
+    """Emacs org-mode / GitHub-pipe table.
+
+    `numeric_mask[i]` true → column i right-aligned; false → left.  The
+    separator row uses `+` at column joins (org convention) so Emacs
+    recognises it as a table-with-rules; also renders as a valid Markdown
+    table (which uses `|` everywhere) in surfaces that don't understand
+    org.
+    """
+    cols = list(headers)
+    cells = [[str(c) for c in row] for row in rows]
+    widths = [len(h) for h in cols]
+    for row in cells:
+        for i, c in enumerate(row):
+            if len(c) > widths[i]:
+                widths[i] = len(c)
+
+    def _fmt_row(cells_in_row):
+        parts = []
+        for i, c in enumerate(cells_in_row):
+            w = widths[i]
+            parts.append(f" {c:>{w}} " if numeric_mask[i] else f" {c:<{w}} ")
+        return "|" + "|".join(parts) + "|"
+
+    sep = "|" + "+".join("-" * (w + 2) for w in widths) + "|"
+    out = [_fmt_row(cols), sep]
+    out += [_fmt_row(r) for r in cells]
+    return "\n".join(out)
 
 
 def _load_scores(run_dir: Path):
@@ -58,25 +170,64 @@ def cmd_summary(args) -> int:
         columns="metric",
         aggfunc="first",
     )
-    # Choose a canonical column order: F1-style metrics first if present
-    _preferred = ("accuracy", "precision", "recall", "f1",
-                  "ari", "purity", "completeness",
-                  "n_matched_spikes", "n_ref_units", "n_cand_units")
-    cols = [c for c in _preferred if c in piv.columns] + \
-           [c for c in piv.columns if c not in _preferred]
+    # Column order: when the user named metrics, keep their order; else
+    # take the compact _DEFAULT_COLS set (dropping any that don't exist in
+    # the pivot) and append the rest at the end so nothing is silently lost.
+    if metrics:
+        cols = [c for c in metrics if c in piv.columns]
+    else:
+        cols = [c for c in _DEFAULT_COLS if c in piv.columns] + \
+               [c for c in piv.columns if c not in _DEFAULT_COLS]
     piv = piv[cols]
 
-    fmt = f"%.{args.decimals}f"
+    fmt_decimals = int(args.decimals)
+    fmt = f"%.{fmt_decimals}f"
+
     if args.format == "csv":
         print(piv.to_csv(float_format=fmt))
         return 0
-    # Pretty text (default) — fixed-decimal so `--decimals` controls output
-    with _pandas_display():
-        print(piv.to_string(float_format=lambda v: fmt % v if v == v else "—"))
+
+    if args.format == "org":
+        _print_org(piv, decimals=fmt_decimals)
+    else:
+        # Pretty text (pandas default) — fixed-decimal so --decimals controls.
+        with _pandas_display():
+            print(piv.to_string(float_format=lambda v: fmt % v if v == v else "—"))
+
     print(f"\n{len(df)} rows across {df['corpus_item'].nunique()} corpus "
           f"item(s), {df['candidate_adapter'].nunique()} adapter(s), "
           f"{df['metric'].nunique()} metric(s)")
     return 0
+
+
+def _print_org(piv, *, decimals: int) -> None:
+    """Emit one org-style table per corpus_item, newline-separated.
+
+    `piv` is a pandas DataFrame indexed by (corpus_item, candidate_adapter)
+    with one column per metric.  The rendered column names come from
+    `_METRIC_ALIASES`; count-like columns render as integers.
+    """
+    import math
+
+    metrics = list(piv.columns)
+    numeric_mask = [True] * (1 + len(metrics))                 # all cols right-aligned
+    numeric_mask[0] = False                                     # adapter name stays left
+    headers = ["adapter"] + [_short(m) for m in metrics]
+
+    corpora = piv.index.get_level_values("corpus_item").unique()
+    for ci, corpus in enumerate(corpora):
+        if ci:
+            print()
+        print(f"# {corpus}")
+        sub = piv.xs(corpus, level="corpus_item")
+        rows = []
+        for adapter, row in sub.iterrows():
+            cells = [str(adapter)]
+            for m in metrics:
+                v = row.get(m)
+                cells.append(_fmt_cell(v, decimals, _is_count_metric(m)))
+            rows.append(cells)
+        print(_org_table(headers, rows, numeric_mask))
 
 
 # ─── compare ────────────────────────────────────────────────────────────────
@@ -197,7 +348,11 @@ def register(subparsers) -> None:
     s.add_argument("--adapter", default="", help="comma-separated adapter filter")
     s.add_argument("--corpus", default="", help="comma-separated corpus filter")
     s.add_argument("--decimals", type=int, default=4)
-    s.add_argument("--format", choices=("text", "csv"), default="text")
+    s.add_argument("--format", choices=("org", "text", "csv"), default="org",
+                    help="org (default): one org-mode table per corpus item, "
+                         "short metric names, right-aligned numerics.  text: "
+                         "legacy pandas pivot (wide, long column names).  csv: "
+                         "raw pivot for piping.")
     s.set_defaults(fn=cmd_summary)
 
     c = subparsers.add_parser("compare",
