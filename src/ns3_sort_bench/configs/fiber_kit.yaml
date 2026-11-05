@@ -63,11 +63,10 @@ fiber_kit:
 #  octrode where units span 2-3 sites and warp (group-delay) is near-degenerate,
 #  so several precision gates are deliberately RELAXED there.  On a probe where
 #  units cover more channels (e.g. a 4-channel tetrode — the paired_crcns_hc1
-#  loader) warp is more informative and these can be tightened.  The adapter's
-#  `_materialise_recording` writes a per-session `fiber_kit.<stage>` section into
-#  the session yaml with channel-count-aware defaults (session-section is below
-#  this global file in fiber-kit's precedence, so a user override here still
-#  wins).  Knobs it touches, and the rule:
+#  loader) warp may be more informative and these could be tightened.  The
+#  adapter does NOT apply them: the tetrode column below, auto-applied in
+#  188dbab, left d11221.001 unchanged (13 clusters, IoU 0.0441 either way), so
+#  it was removed.  Set any of them in $FK_CONFIG to try them.  The hints:
 #
 #      knob                        source (8ch)  tetrode (<=4ch) hint
 #      FK_INTRA_DEPTH_GATE (um)    35            60              (loose; no z axis)

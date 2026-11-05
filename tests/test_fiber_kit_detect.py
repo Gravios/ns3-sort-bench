@@ -880,45 +880,12 @@ def test_write_fk_config_legacy_mode_stays_minimal(tmp_path):
     assert parsed.get("FK_SESSION_REALIGN") == "off"
 
 
-def test_channel_count_overrides_tighten_for_tetrode(tmp_path):
-    """`_channel_count_fk_overrides(n_ch)` must retune the five
-    channel-count-sensitive knobs for ≤4-channel probes.
-
-    The ported yaml's baseline is tuned on an 8-channel octrode; on a
-    tetrode, warp becomes discriminative and should gate tighter, while
-    position / depth become less reliable and should gate looser.  The
-    numerical targets come from the yaml's leading comment table.
-    """
-    from ns3_sort_bench.adapters.fiber_kit import _channel_count_fk_overrides
-
-    # Tetrode (n=4) — overrides apply.
-    o = _channel_count_fk_overrides(4)
-    assert o["FK_INTRA_DEPTH_GATE"] == 60     # was 35 on octrode
-    assert o["FK_LINK_POS_THR"]     == 2.5    # was 1.5
-    assert o["FK_LINK_WARP_THR"]    == 0.5    # was 0.3
-    assert o["FK_BBLINK_WARP_THR"]  == 0.7    # was 0.5
-    assert o["FK_ALINK_PRIM_FRAC"]  == 0.25   # was 0.15
-    # The yaml's comment table marks BACKBONE_WARP "unchanged"; not in
-    # the override map so the baseline wins.
-    assert "FK_INTRA_BACKBONE_WARP" not in o
-
-    # Stereotrode / monopolar (≤4): same branch applies.
-    assert _channel_count_fk_overrides(1) == o
-    assert _channel_count_fk_overrides(2) == o
-    assert _channel_count_fk_overrides(3) == o
-
-    # Linear 5-ch / octrode / high-density: no overrides (baseline wins).
-    assert _channel_count_fk_overrides(5)  == {}
-    assert _channel_count_fk_overrides(8)  == {}
-    assert _channel_count_fk_overrides(32) == {}
-
-
 def test_write_fk_config_auto_overrides_sit_below_user(tmp_path):
     """`_write_fk_config` merge order: baseline < auto_overrides < user.
 
     A user who has deliberately set, say, FK_LINK_WARP_THR to 0.8 in
-    their own ./fiber-kit.yaml must see 0.8 in the merged file even on
-    a tetrode (where the auto-override would otherwise set 0.5).
+    their own ./fiber-kit.yaml must see 0.8 in the merged file even when
+    an auto override would otherwise set 0.5.
     """
     import os, yaml
     user_cfg = tmp_path / "user_tuning.yaml"
@@ -931,14 +898,13 @@ def test_write_fk_config_auto_overrides_sit_below_user(tmp_path):
 
     orig = os.environ.pop("FK_CONFIG", None)
     try:
-        from ns3_sort_bench.adapters.fiber_kit import (
-            _FiberKitBase, _channel_count_fk_overrides,
-        )
-        tetrode_overrides = _channel_count_fk_overrides(4)
+        from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
         path = _FiberKitBase._write_fk_config(
             str(out_dir),
             user_cfg_path=str(user_cfg),
-            auto_overrides=tetrode_overrides,
+            auto_overrides={"FK_LINK_WARP_THR": 0.5,
+                            "FK_INTRA_DEPTH_GATE": 60,
+                            "FK_ALINK_PRIM_FRAC": 0.25},
         )
     finally:
         if orig is not None:

@@ -408,45 +408,6 @@ _FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
 _FIBER_KIT_SCOREABLE_STAGES = ("fiber_session", "fs_clean", "exp_xcm")
 
 
-def _channel_count_fk_overrides(n_channels: int) -> dict:
-    """Return the FK_* overrides keyed on the session's channel count.
-
-    The fiber-kit tuning shipped in ``configs/fiber_kit.yaml`` is the
-    user's own, measured on an 8-channel octrode (sirotaA-jg-000005,
-    group 6 / 7).  That geometry makes group-delay / warp features
-    near-degenerate — the yaml compensates by relaxing warp thresholds
-    and leaning on depth; on a 4-channel probe, the trade flips.
-
-    The override map below mirrors the guidance in the yaml's leading
-    comment table (CHANNEL-COUNT-SENSITIVE knobs), written when the yaml
-    was ported in patch 0015.  Four- or fewer-channel groups (tetrodes
-    and smaller) get the right-column tetrode values; everything else
-    takes the yaml defaults.
-
-    Returns {} outside that regime so the FK_PIPELINE baseline wins.
-    """
-    if n_channels <= 4:
-        return {
-            # LOOSE position gates — fewer channels means less z-axis
-            # resolution; the 35 µm / 1.5 gates designed around 20-µm
-            # octrode pitch become false negatives on tetrodes.
-            "FK_INTRA_DEPTH_GATE": 60,
-            "FK_LINK_POS_THR":     2.5,
-            # TIGHTER warp gates — on a tetrode, warp (group delay) is
-            # actually discriminative (not near-degenerate like on 8 ch),
-            # so the gate can require more coherence.
-            "FK_LINK_WARP_THR":    0.5,
-            "FK_BBLINK_WARP_THR":  0.7,
-            # ALINK primary-channel fraction — higher cutoff restricts
-            # comparison to the top 2-3 channels on a 4-channel probe,
-            # which is where a tetrode's amplitude profile actually sits.
-            "FK_ALINK_PRIM_FRAC":  0.25,
-            # FK_INTRA_BACKBONE_WARP is intentionally NOT overridden —
-            # the yaml comment table marks it "unchanged".
-        }
-    return {}
-
-
 def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
                             ) -> list:
     """Build the `programs:` list for an auto-generated session yaml.
@@ -850,12 +811,10 @@ class _FiberKitBase(SorterAdapter):
              ``FK_SESSION_REALIGN: "off"``, because the end-of-run realign
              refuses to work on raw waveforms when its token asks for
              stderiv — we have no ``.spk.stderiv.<g>``.
-          2. `auto_overrides` — per-session adjustments ns3sb computes
-             from the recording itself (today: the
-             channel-count-sensitive warp / position / primary-channel
-             knobs; see ``_channel_count_fk_overrides``).  Merged above
-             the baseline, below the user, so an explicit user value
-             still wins.
+          2. `auto_overrides` — per-session adjustments a caller computes
+             from the recording itself (the adapter passes none today).
+             Merged above the baseline, below the user, so an explicit
+             user value still wins.
           3. The user's own tuning, from `user_cfg_path` when given,
              otherwise from `$FK_CONFIG`, otherwise from
              ``./fiber-kit.yaml`` in CWD (the same search order
@@ -1010,19 +969,14 @@ class _FiberKitBase(SorterAdapter):
             # explicit fk_config_path), with USER KEYS WINNING on conflict.
             # Pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and
             # keeps the user's CA1 tuning (FK_XCM_*, FK_CHUNKS, ...) intact.
-            # On top of that, ship any channel-count-sensitive auto
-            # overrides (DEPTH_GATE / LINK_POS_THR / WARP thresholds /
-            # ALINK_PRIM_FRAC retuned for ≤4-channel probes) — these sit
-            # between the baseline and the user's tuning, so a user who
-            # has set them explicitly still wins.
+            # No channel-count auto overrides: the tetrode set tried in
+            # 188dbab left d11221.001 unchanged (same 13 clusters, IoU
+            # 0.0441).  Three of its five keys tune fiber-link /
+            # fiber-backbone-link, which the 9-step plan does not run.
             # Point FK_CONFIG at the merged file so every stage sees it.
-            auto_overrides = _channel_count_fk_overrides(
-                int(recording.get_num_channels())
-            )
             fk_config = self._write_fk_config(
                 tmp_dir,
                 user_cfg_path=kwargs.get("fk_config_path"),
-                auto_overrides=auto_overrides,
             )
             env["FK_CONFIG"] = fk_config
             fk_cfg_source, fk_cfg_origin = _resolve_user_fk_config(
@@ -1030,7 +984,6 @@ class _FiberKitBase(SorterAdapter):
             fk_provenance = dict(
                 fk_config_user=fk_cfg_source,
                 fk_config_user_origin=fk_cfg_origin,
-                fk_config_auto_overrides=sorted(auto_overrides),
                 fk_config_sha256=fk_config_digest(fk_config),
             )
 
