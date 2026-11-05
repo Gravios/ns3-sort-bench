@@ -103,9 +103,11 @@ def test_export_adapter_session_writes_full_quintuple(tmp_path, monkeypatch):
         corpus.ground_truth,
     )
 
-    # Layout: <output>/klusters/<item_slug>/<adapter_slug>/
-    assert Path(sess_dir).name == "fiber_kit"
-    assert Path(sess_dir).parent.name == "MY_CORPUS_ITEM"
+    # Layout: <output>/klusters_<adapter_slug>/<item_slug>/
+    # (per-sorter top-level, so each adapter is curated as a stand-alone
+    # Klusters project rooted at its own folder)
+    assert Path(sess_dir).name == "MY_CORPUS_ITEM"
+    assert Path(sess_dir).parent.name == "klusters_fiber_kit"
     base = Path(sess_dir) / "sim_session"
 
     # Shared files — .fil for fiber-session, .dat for Klusters, same bytes.
@@ -146,11 +148,17 @@ def test_export_klusters_session_includes_ground_truth(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(_subprocess, "run", _Runner())
 
-    item_dir = export_klusters_session(
+    sess_dirs = export_klusters_session(
         str(tmp_path / "runs"), corpus, {"fiber_kit": cand},
     )
-    assert (Path(item_dir) / "fiber_kit" / "sim_session.res.standard.1").exists()
-    assert (Path(item_dir) / "ground_truth" / "sim_session.res.standard.1").exists()
+    out = Path(tmp_path / "runs")
+    # One session dir per adapter (and GT), each under klusters_<adapter>/<item>/
+    assert (out / "klusters_fiber_kit" / "item_a" /
+            "sim_session.res.standard.1").exists()
+    assert (out / "klusters_ground_truth" / "item_a" /
+            "sim_session.res.standard.1").exists()
+    assert {Path(p).parent.name for p in sess_dirs} == {"klusters_fiber_kit",
+                                                         "klusters_ground_truth"}
 
 
 def test_export_klusters_session_without_gt_skips_it(tmp_path, monkeypatch):
@@ -161,9 +169,10 @@ def test_export_klusters_session_without_gt_skips_it(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(_subprocess, "run", _Runner())
 
-    item_dir = export_klusters_session(
+    sess_dirs = export_klusters_session(
         str(tmp_path / "runs"), corpus, {"fiber_kit": cand},
         include_ground_truth=False,
     )
-    assert (Path(item_dir) / "fiber_kit").exists()
-    assert not (Path(item_dir) / "ground_truth").exists()
+    out = Path(tmp_path / "runs")
+    assert (out / "klusters_fiber_kit" / "item_b").exists()
+    assert not (out / "klusters_ground_truth").exists()

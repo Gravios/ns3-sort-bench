@@ -1,25 +1,41 @@
 """Export Klusters-openable sessions from benchmark results.
 
-Each (corpus item, adapter) pair gets its own stand-alone session dir at
+Each (adapter, corpus item) pair gets its own stand-alone session dir at
 
-    <output_dir>/klusters/<item_slug>/<adapter_slug>/
+    <output_dir>/klusters_<adapter_slug>/<item_slug>/
         sim_session.fil                 shared raw int16 trace
         sim_session.yaml                session descriptor (+ programs block)
         sim_session.res.standard.1      THIS adapter's spike times     (int64)
         sim_session.spk.standard.1      waveforms at those times       (int16)
         sim_session.fet.standard.1      PCA features                    (int)
         sim_session.pca.standard.1      PCAE basis                      (float)
-        sim_session.clu.standard.1      THIS adapter's cluster ids     (int32)
+        sim_session.clu.standard.1.<raw_tag>      adapter's raw sort    (int32)
+        sim_session.clu.standard.1.curated        after human curation  (int32)
+        sim_session.cur.standard.1                curation log (JSON Lines)
 
-The `.fil` + `.yaml` are hardlinked / copied from the item's upstream session
-(the fiber-kit tmp dir when `keep_fk_artifacts=true`, or the lab-session base
-for `lab:` corpora).  The adapter's `.res` is written directly from the
-SortedResult; `ndm_extractspikes` + `ndm_pca` then produce the matching
-`.spk`, `.fet` and `.pca`.  Opening `sim_session.yaml` in Klusters shows
-that adapter's clustering against the raw recording.
+Per-adapter top-level folders let the user curate each sorter's output
+independently (open <output>/klusters_<sorter>/<item>/sim_session.yaml
+in Klusters, merge the fragments, Save; Klusters writes the curated
+.clu under a `curated` stage tag + a .cur action log).  Later passes
+can then:
 
-Ground truth is included as a separate adapter tag (`ground_truth`) so the
-patched reference cell sits alongside every candidate.
+    * score the curated .clu against GT via per_cell / oracle_merge
+      (`ns3sb score-curated`) to confirm parity, and
+    * read the .cur log via `ns3sb curate-diff` to measure how much
+      effort the curation took — comparable across sorters applied to
+      the same corpus item.
+
+The `.fil` + `.yaml` are hardlinked / copied from the item's upstream
+session (the fiber-kit tmp dir when `keep_fk_artifacts=true`, or the
+lab-session base for `lab:` corpora).  The adapter's `.res` is written
+directly from the SortedResult; `ndm_extractspikes` + `ndm_pca` then
+produce the matching `.spk`, `.fet` and `.pca`.
+
+Ground truth exports as its OWN pseudo-sorter under
+``klusters_ground_truth/<item>/``, on equal footing with every real
+sorter — curate-able like any other for a sanity check, and giving
+``score-curated`` a single conventional place to find the reference
+clustering when the corpus's in-memory GT isn't available.
 """
 from __future__ import annotations
 
@@ -167,7 +183,7 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
     """
     item_slug = _slugify(corpus.name)
     adapter_slug = _slugify(adapter_name)
-    sess_dir = os.path.join(output_dir, "klusters", item_slug, adapter_slug)
+    sess_dir = os.path.join(output_dir, f"klusters_{adapter_slug}", item_slug)
     os.makedirs(sess_dir, exist_ok=True)
     base = os.path.join(sess_dir, "sim_session")
 
@@ -233,19 +249,18 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
 def export_klusters_session(output_dir: str, corpus: Corpus,
                               candidates: Mapping[str, SortedResult],
                               *, include_ground_truth: bool = True,
-                              **kw) -> str:
+                              **kw) -> list[str]:
     """Write per-adapter Klusters sessions for one corpus item.
 
     `candidates` maps adapter name → SortedResult.  If `include_ground_truth`
     is true and the corpus has a non-empty ground truth, it is exported as
-    an additional adapter under the `ground_truth` tag.
-    Returns the parent item dir.
+    a pseudo-adapter under ``klusters_ground_truth/<item>/`` on equal
+    footing with the real sorters.
+    Returns the list of per-adapter session dirs written.
     """
     results = dict(candidates)
     if include_ground_truth and corpus.ground_truth is not None \
             and "ground_truth" not in results:
         results["ground_truth"] = corpus.ground_truth
-    item_dir = os.path.join(output_dir, "klusters", _slugify(corpus.name))
-    for name, result in results.items():
-        export_adapter_session(output_dir, corpus, name, result, **kw)
-    return item_dir
+    return [export_adapter_session(output_dir, corpus, name, result, **kw)
+            for name, result in results.items()]

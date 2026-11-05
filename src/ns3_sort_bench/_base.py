@@ -315,10 +315,14 @@ class BenchmarkRun:
             if self.export_klusters and candidates_for_corpus:
                 try:
                     from .klusters_export import export_klusters_session
-                    item_dir = export_klusters_session(
+                    sess_dirs = export_klusters_session(
                         self.output_dir, corpus, candidates_for_corpus,
                     )
-                    self._log(f"  klusters sessions written under {item_dir}")
+                    # Each sorter now lives under its OWN klusters_<sorter>/
+                    # top-level; list one line per session dir so a returning
+                    # user sees exactly where to open each one for curation.
+                    for sd in sess_dirs:
+                        self._log(f"  klusters session: {sd}")
                 except Exception as e:
                     self._log(f"  klusters export FAILED: {type(e).__name__}: {e}")
 

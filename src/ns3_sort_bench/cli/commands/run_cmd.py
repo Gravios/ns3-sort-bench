@@ -89,7 +89,7 @@ def cmd_run(args) -> int:
         if plan.keep_fk_artifacts:
             print(f"fiber-kit artifacts kept under {output_dir}/fiber_kit/")
         if plan.export_klusters:
-            print(f"Klusters sessions written under {output_dir}/klusters/")
+            print(f"Klusters sessions written under {output_dir}/klusters_<sorter>/")
     return 0
 
 
