@@ -1,14 +1,35 @@
 """SLAy adapter (Janelia 2025).  Post-pass on Kilosort 4 output."""
 from __future__ import annotations
 
+from typing import Mapping
 import numpy as np
 
 from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
+from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+def _slay_config_defaults() -> "tuple[dict, dict]":
+    """Pull ks_kwargs + slay_kwargs defaults out of configs/slay.yaml.
+
+    Shape is ``{ks_kwargs: {...}, slay_kwargs: {...}}``.  Missing or
+    non-mapping sections → empty dicts.  Caller's own
+    sort(ks_kwargs=..., slay_kwargs=...) merges on top at call time.
+    """
+    cfg = load_adapter_config("slay")
+    if not isinstance(cfg, Mapping):
+        return {}, {}
+    ks = cfg.get("ks_kwargs", {})
+    sl = cfg.get("slay_kwargs", {})
+    return (dict(ks) if isinstance(ks, Mapping) else {},
+            dict(sl) if isinstance(sl, Mapping) else {})
+
+
+_SLAY_KS_DEFAULTS, _SLAY_MERGE_DEFAULTS = _slay_config_defaults()
 
 
 CONTRACT = Contract(
@@ -83,11 +104,17 @@ class SLAyAdapter(SorterAdapter):
         if not self._available:
             raise EnvironmentError(f"slay: {self._reason}")
 
+        # Merge configs/slay.yaml defaults with caller one-offs; caller
+        # wins on key conflict, matching every other adapter's config
+        # overlay.  ks_kwargs are the sort() kwargs for the wrapped
+        # kilosort4 adapter (its own config still fills the rest);
+        # slay_kwargs feed the NN-merge classifier.
+        ks_kw = {**_SLAY_KS_DEFAULTS, **kwargs.get("ks_kwargs", {})}
+        slay_kw = {**_SLAY_MERGE_DEFAULTS, **kwargs.get("slay_kwargs", {})}
         with measure_runtime() as rt:
             ks = adapter_registry["kilosort4"]
-            ks_result = ks.sort(recording, **kwargs.get("ks_kwargs", {}))
-            merges = _slay_merges(recording, ks_result,
-                                   **kwargs.get("slay_kwargs", {}))
+            ks_result = ks.sort(recording, **ks_kw)
+            merges = _slay_merges(recording, ks_result, **slay_kw)
             merged = _apply_merges(ks_result.spike_times, merges)
 
         return SortedResult(

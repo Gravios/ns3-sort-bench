@@ -40,9 +40,29 @@ import numpy as np
 from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
+from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+def _config_defaults() -> dict:
+    """Pull the kwarg defaults out of ``configs/botm_ref.yaml``.
+
+    The file is flat scalars at the top level (n_units_hint,
+    detect_threshold_mad, template_samples, peak_sample, botm_backend).
+    Missing keys fall back to the hard-coded defaults in sort() /
+    _bootstrap_templates — this is a strict overlay.
+    """
+    cfg = load_adapter_config("botm_ref")
+    if not isinstance(cfg, Mapping):
+        return {}
+    allowed = {"n_units_hint", "detect_threshold_mad",
+                "template_samples", "peak_sample", "botm_backend"}
+    return {k: v for k, v in cfg.items() if k in allowed}
+
+
+_BOTM_REF_CFG = _config_defaults()
 
 
 CONTRACT = Contract(
@@ -124,8 +144,19 @@ class BOTMReferenceAdapter(SorterAdapter):
         if not isinstance(recording, BaseRecording):
             raise TypeError("botm_ref needs a SpikeInterface BaseRecording")
 
-        backend_pref = kwargs.get("botm_backend") \
-                        or os.environ.get("NS3SB_BOTM_BACKEND") or "auto"
+        # Resolve each knob in precedence order: caller kwarg >
+        # configs/botm_ref.yaml > hard-coded default.  `.get(k, cfg_v)`
+        # puts the caller first and the config next.  Env still wins
+        # for the backend only (kept for scripted sweeps).
+        def _cfg(key, default):
+            if key in kwargs:
+                return kwargs[key]
+            return _BOTM_REF_CFG.get(key, default)
+
+        backend_pref = _cfg("botm_backend",
+                              os.environ.get("NS3SB_BOTM_BACKEND") or "auto")
+        if os.environ.get("NS3SB_BOTM_BACKEND"):
+            backend_pref = os.environ["NS3SB_BOTM_BACKEND"]
         discriminant_fn, backend_used = _pick_discriminant_backend(backend_pref)
 
         with measure_runtime() as rt:
@@ -135,9 +166,10 @@ class BOTMReferenceAdapter(SorterAdapter):
             n_samp, n_ch = traces.shape
             sr = recording.get_sampling_frequency()
 
-            tpl_samples = int(kwargs.get("template_samples", 32))
-            peak = int(kwargs.get("peak_sample", 16))
-            n_units_hint = int(kwargs.get("n_units_hint", 3))
+            tpl_samples = int(_cfg("template_samples", 32))
+            peak        = int(_cfg("peak_sample", 16))
+            n_units_hint = int(_cfg("n_units_hint", 3))
+            detect_thr_mad = float(_cfg("detect_threshold_mad", -4.0))
 
             init_times = None
             templates = kwargs.get("initial_templates", None)
@@ -145,6 +177,7 @@ class BOTMReferenceAdapter(SorterAdapter):
                 templates, init_times, _init_labels = _bootstrap_templates(
                     traces, tpl_samples=tpl_samples, peak=peak,
                     n_units_hint=n_units_hint,
+                    detect_threshold_mad=detect_thr_mad,
                 )
             else:
                 templates = np.asarray(templates, np.float64)
@@ -179,12 +212,20 @@ class BOTMReferenceAdapter(SorterAdapter):
 
 
 # ─── helpers (thesis-form, plain numpy) ──────────────────────────────────────
-def _bootstrap_templates(traces, *, tpl_samples=32, peak=16, n_units_hint=3):
+def _bootstrap_templates(traces, *, tpl_samples=32, peak=16, n_units_hint=3,
+                         detect_threshold_mad: float = -4.0):
+    """Negative-threshold detector + KMeans on PCA features → initial
+    templates for SIC-B.  `detect_threshold_mad` is a multiple of the
+    per-channel MAD (median absolute deviation × 1.4826) — expected
+    negative, since BOTM detects on negative-going spikes.  Looser
+    (closer to 0, e.g. -3.0) picks up more candidates; tighter (more
+    negative, e.g. -5.0) keeps only the bigger spikes.
+    """
     n_samp, n_ch = traces.shape
     mad = np.median(np.abs(traces - np.median(traces, axis=0)), axis=0) * 1.4826
     peaks = []
     ch = int(np.argmax(np.ptp(traces, axis=0)))
-    thr = -4.0 * mad[ch]
+    thr = float(detect_threshold_mad) * mad[ch]
     for i in range(peak, n_samp - tpl_samples + peak):
         if traces[i, ch] < thr and traces[i, ch] <= traces[i - 1, ch] \
                                  and traces[i, ch] <= traces[i + 1, ch]:

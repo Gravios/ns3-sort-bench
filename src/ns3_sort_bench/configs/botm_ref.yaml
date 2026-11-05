@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# botm_ref (native Python SIC-B BOTM) adapter defaults
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/botm_ref.py.  Keys mirror the kwargs
+# that adapter.sort() already accepts; a value set in sort(**kwargs) merges
+# on top of the entries here, so a one-off tuning via the harness still
+# wins over the baseline.
+#
+# Not every knob is validated on a reference session — the values below
+# are first-guess starting points from a read of the implementation and
+# the Pröpper thesis, not a sweep.  Tune against jg05-20120316 g7
+# (reference session) before claiming improvements.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# How many templates the bootstrap KMeans produces before SIC-B starts
+# placing them.  The default (3) worked on the simplest simulated
+# corpora but under-provisions on anything with more than a handful of
+# cells: SIC-B can only explain spikes with a template it was given, so
+# a 3-template start on CA1 paired recordings consistently matches
+# nothing.  8-20 is a safer starting range for in vivo data; higher is
+# cheap on short sessions, expensive on long ones (iterations grow
+# linearly).
+n_units_hint: 12
+
+# Negative-peak detector threshold for the bootstrap, expressed as a
+# multiple of per-channel MAD (median absolute deviation × 1.4826).  The
+# source previously hard-coded -4.0 * mad; exposing it lets quiet CA1
+# traces pick up small-amplitude spikes (try -3.5 or -3.0) without
+# inflating noise hits on low-impedance probes.  Must be negative.
+detect_threshold_mad: -4.0
+
+# Snippet width (samples) and the within-snippet peak index.  Keep at
+# the Klusters-convention 32/16 unless the whole pipeline has moved.
+template_samples: 32
+peak_sample:      16
+
+# Preferred SIC-B backend: "auto" picks torch when available (one
+# batched conv1d replaces T×n_ch cross-correlates — ~10× speedup on a
+# modern GPU), falls back to numpy.  "numpy" / "torch" force one.  No
+# effect on sort results, only wall-time.
+botm_backend: auto

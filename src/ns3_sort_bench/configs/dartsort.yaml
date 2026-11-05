@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DARTsort (via SpikeInterface) run_kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by src/ns3_sort_bench/adapters/dartsort.py.  Passed as
+# run_kwargs=<dict> through spikeinterface.sorters.run_sorter(), with
+# caller sort(run_kwargs={...}) merging on top.
+#
+# Starting values below are first-guess for a short in-vivo recording
+# with few channels (tetrode / sub-10-ch probe) and NO drift to speak
+# of; validate against jg05-20120316 g7 before claiming improvements.
+# The defaults DARTsort ships are tuned for Neuropixels-scale geometry.
+#
+# Key references:
+#   dartsort.config.DARTsortConfig            — top-level dataclass
+#   dartsort.config.motion_est                — drift estimation block
+#   dartsort.config.featurization_config      — PCA + localisation
+#   dartsort.config.template_config           — per-unit template
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_kwargs:
+  # Detection threshold (multiples of per-channel noise σ).  DARTsort's
+  # upstream default is ~6; 4-5 is more permissive and useful on quiet
+  # CA1 traces where the smallest real spikes sit near-floor.  Raising
+  # back to 6 is the move if the sort returns too many false positives.
+  detection_threshold: 5.0
+
+  # Motion estimation off.  DARTsort's drift path learns per-depth
+  # displacement from the spikes themselves; on a short session or a
+  # few-channel probe there aren't enough spikes to fit it reliably,
+  # and the regulariser drags the GT cell's position away from the
+  # real one.  Turn back on for long Neuropixels recordings.
+  do_motion_estimation: false
+
+  # Per-channel PCA features for featurisation.  Default (5) is fine
+  # for high-density probes; on 4-8 channel geometries a slightly
+  # richer feature space (6-8) helps separate co-located cells.
+  n_pca_features: 6

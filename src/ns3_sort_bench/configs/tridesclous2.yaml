@@ -2,6 +2,23 @@
 # Tridesclous 2 (via SpikeInterface) run_kwargs
 # ─────────────────────────────────────────────────────────────────────────────
 # Read by src/ns3_sort_bench/adapters/si_sorters.py::Tridesclous2Adapter.
-# Currently empty — Tridesclous 2 runs with upstream defaults.
+# Passed verbatim as **run_kwargs to spikeinterface.sorters.run_sorter().
+# Users can merge on top at call time via adapter.sort(run_kwargs={...}).
+#
+# Pre-tuning tridesclous2 was already the IoU leader on the paired
+# CRCNS hc1 run (0.09), but its matched cluster is small (58 spikes).
+# Nudging the thresholds for more recall without destroying precision
+# is the goal here — first-guess, validate on the reference session.
 # ─────────────────────────────────────────────────────────────────────────────
-run_kwargs: {}
+
+run_kwargs:
+  # Detection threshold (σ multiples).  Upstream default is 5; 4.5
+  # lets the quieter half of the real cell's spikes join the matched
+  # cluster at the cost of some noise hits.  Raise back if precision
+  # degrades more than recall improves.
+  detect_threshold: 4.5
+
+  # Keep the clean number of PCA features (upstream default ~5) to
+  # avoid the feature-dimensionality blow-up TDC2 is vulnerable to
+  # on low-channel-count probes.
+  n_pca_features: 5

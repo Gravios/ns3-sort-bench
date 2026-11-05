@@ -2,7 +2,30 @@
 # SpykingCircus 2 (via SpikeInterface) run_kwargs
 # ─────────────────────────────────────────────────────────────────────────────
 # Read by src/ns3_sort_bench/adapters/si_sorters.py::SpykingCircus2Adapter.
-# Currently empty — SpykingCircus 2 runs with upstream defaults.  Motion
-# correction can misfire on short recordings; the Contract documents this.
+# Passed verbatim as **run_kwargs to spikeinterface.sorters.run_sorter().
+# Users can merge on top at call time via adapter.sort(run_kwargs={...}).
+#
+# Motion correction can misfire on short recordings; the Contract
+# documents this.  Below is a first-guess retune for low-channel-count
+# in-vivo probes — validate against the reference session before
+# claiming improvements.
 # ─────────────────────────────────────────────────────────────────────────────
-run_kwargs: {}
+
+run_kwargs:
+  # Drift correction off.  SC2's motion correction expects dense
+  # Neuropixels-style geometry; on a 4-8 channel probe it tries to
+  # fit a model from too few spikes and the regulariser drags the
+  # template away from the real cell.  Turn back on for ≥32-channel
+  # probes with a known drift signal.
+  apply_motion_correction: false
+
+  # Detection threshold (σ multiples).  Upstream default is 5; 4.5 is
+  # mildly more permissive and useful on quiet CA1 traces.  Raise
+  # back if the sort inflates with false positives.
+  detect_threshold: 4.5
+
+  # Cross-channel detection radius (µm).  Default (~50) assumes
+  # Neuropixels; on a tetrode scale the spatial reach is more like
+  # 100-200 µm, so a larger radius keeps the real cell's footprint
+  # together without over-pooling distant noise.
+  detect_radius: 150

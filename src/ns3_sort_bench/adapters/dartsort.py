@@ -2,14 +2,31 @@
 from __future__ import annotations
 
 import tempfile
+from typing import Mapping
 import numpy as np
 
 from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
+from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+def _run_kwargs_from_config() -> dict:
+    """``run_kwargs:`` section of ``configs/dartsort.yaml`` as a dict.
+
+    Empty when the file is absent or the section isn't a mapping.
+    Same contract as si_sorters._run_kwargs_from_config — the caller's
+    sort(run_kwargs={...}) merges on top, so one-off tuning still wins.
+    """
+    cfg = load_adapter_config("dartsort")
+    rk = cfg.get("run_kwargs", {}) if isinstance(cfg, Mapping) else {}
+    return dict(rk) if isinstance(rk, Mapping) else {}
+
+
+_DARTSORT_RUN_KWARGS = _run_kwargs_from_config()
 
 
 CONTRACT = Contract(
@@ -97,13 +114,21 @@ class DARTsortAdapter(SorterAdapter):
 
 
 def _run_dartsort(recording, folder, **kwargs):
+    # Merge configs/dartsort.yaml defaults with the caller's one-off
+    # run_kwargs; the caller WINS on key conflict, matching every
+    # other adapter's config-overlay semantics.
+    run_kw = {**_DARTSORT_RUN_KWARGS, **kwargs.get("run_kwargs", {})}
     try:
         from spikeinterface.sorters import run_sorter
         return run_sorter(sorter_name="dartsort", recording=recording,
                            folder=folder, remove_existing_folder=True,
-                           verbose=False, **kwargs.get("run_kwargs", {}))
+                           verbose=False, **run_kw)
     except (ValueError, ImportError):
         import dartsort
+        # Direct-call path has its own kwarg shape (direct_kwargs); the
+        # config overlay only fires on the SI path, which is the
+        # production codepath.  Callers of the fallback can still
+        # pass direct_kwargs for one-off tuning.
         return dartsort.main.run_dartsort(
             recording=recording, output_directory=folder,
             **kwargs.get("direct_kwargs", {}),
