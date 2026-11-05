@@ -14,6 +14,7 @@ from .commands import (
     review_cmd,
     run_cmd,
     score_curated_cmd,
+    inspect_clu_cmd,
 )
 from .plan import plan_path
 
@@ -83,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # Curation-effort diff (Klusters .clu + .cur comparison)
     curate_cmd.register(sub)
     score_curated_cmd.register(sub)
+    inspect_clu_cmd.register(sub)
     misc_cmd.register_lattice(sub)
     misc_cmd.register_render(sub)
     misc_cmd.register_doctor(sub)
