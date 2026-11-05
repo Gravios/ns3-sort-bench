@@ -535,60 +535,72 @@ def _channel_locations_or_default(recording, n_ch: int) -> np.ndarray:
     return np.ascontiguousarray(locs[:, :2].astype(float))
 
 
-# ─── per-stage method-token + input-clu argparse flags ──────────────────────
-# Each fiber-kit stage names the method token under a DIFFERENT argparse
-# flag, AND the later stages need to know where the previous stage's .clu
-# landed.  Cross-checked against src/fiber_kit/fiber_<stage>.py:
+# ─── per-stage I/O wiring for the full fiber-kit chain ──────────────────────
+# Full chain on a materialised SpikeInterface recording, cross-checked
+# against each stage's argparse + input-resolution code:
 #
-#   fiber-session      --method <m>              extraction method tag
-#   fiber-realign      --variant <m>             input variant to realign
-#                      --clu <path>              fiber-session's output
-#                                                 (otherwise falls back to
-#                                                 the legacy UNTAGGED
-#                                                 <base>.clu.<group>, which
-#                                                 does not exist in a tagged
-#                                                 session → FileNotFoundError
-#                                                 observed on hc1_full)
-#   fiber-refine       --out-method <m>          writes <m>_refine
-#   fiber-peel         --cpos-method <m>         position features space
-#                      --clu-method <m>          input clu variant
-#                      --clu-stage fiber_session read fiber-session's .clu
-#   fiber-intrachunk   --cpos-method <m>
-#                      --clu-method <m>
-#                      --clu-stage fiber_session
-#   fiber-link         --cpos-method <m>
-#                      --clu-method <m>
-#                      --clu-stage fiber_session  → .clu.<m>.<g>.fiber_session_linked
-#                                                   (matches _MODE_FINAL_TAG)
+#   stage            reads                           writes
+#   ---------------  ------------------------------  -------------------------------
+#   fiber-session    .res.<m>.<g>, .spk.<m>.<g>      .clu.<m>.<g>.fiber_session
+#   fiber-realign    --clu <path>                    .clu.<m>.<g>              (canonical)
+#                                                    updates .res / .spk / .fet
+#   fiber-refine     --in-clu <path>                 .clu.<m>.<g>.refine
+#   fiber-cpos       .clu.<m>.<g>.refine, .spk.<m>.<g>, probe   .cpos.<m>.<g>.refine.clusters.npz
+#   fiber-peel       .clu.<m>.<g>.refine             .clu.<m>.<g>.refine (in-place)
+#   fiber-intrachunk .clu.<m>.<g>.refine, .cpos|probe .clu.<m>.<g>.refine_intrachunk
+#   fiber-link       .clu.<m>.<g>.refine,
+#                    .cpos.<m>.<g>.refine.clusters.npz  (REQUIRED, no on-the-fly fallback)
+#                                                   .clu.<m>.<g>.refine_linked
 #
-# `_stage_method_flags(m)` builds the full table in one place; the adapter's
-# sort() runs its stage loop against it so the full chain stays argparse-
-# compatible across fiber-kit versions.  Adding a new stage: extend the dict.
+# Argparse surfaces for the method token (same token, different flag per
+# stage; cross-checked against src/fiber_kit/fiber_<stage>.py):
 #
-# The `--clu <path>` for fiber-realign is session-specific (depends on the
-# sess_base path), so it is added separately in `sort()` after the base
-# flags from this table.
+#   fiber-session      --method <m>
+#   fiber-realign      --variant <m>
+#   fiber-refine       --out-method <m>
+#   fiber-cpos         --spk-method, --clu-method, --out-method
+#   fiber-peel         --cpos-method, --clu-method
+#   fiber-intrachunk   --cpos-method, --clu-method
+#   fiber-link         --cpos-method, --clu-method
+#
+# Two things the defaults get wrong on a materialised recording and we
+# correct here:
+#
+#   1. fiber-refine's default --in-clu lookup is ``prefer_canonical()`` =
+#      ``["", "stderiv", "D"]`` — it NEVER tries the "standard" variant,
+#      so ``.clu.standard.<g>`` (what fiber-realign leaves) is invisible
+#      to it and it silently starts a fresh fine sort.  We pass --in-clu
+#      explicitly.
+#   2. fiber-link requires a precomputed .cpos .clusters.npz (no on-the-
+#      fly localizer fallback — unlike fiber-intrachunk).  So the chain
+#      MUST include fiber-cpos between fiber-refine and fiber-link.
+#
+# The chain's final readback tag with this wiring is ``refine_linked``
+# (fiber-link's ``--out-stage`` default is ``<clu-stage>_linked`` and
+# clu-stage inherits cpos-stage=refine) — NOT the historical
+# ``fiber_session_linked`` which a previous iteration tried to force.
+#
+# The `--clu` (fiber-realign) and `--in-clu` (fiber-refine) paths are
+# session-specific, so they are added in `sort()` after the method flags.
 def _stage_method_flags(method: str) -> dict[str, list[str]]:
-    """Return {stage: [flag, value, ...]} for the method token injection.
-
-    Later stages also get ``--clu-stage fiber_session`` so they read the
-    .clu.<method>.<g>.fiber_session that fiber-session wrote (default
-    cpos-stage=refine assumes a stderiv lab-session chain that doesn't
-    exist on a materialised SpikeInterface recording).  fiber-realign
-    takes an explicit ``--clu <path>`` injected at call time (see
-    `sort()`), because its fallback name is the LEGACY untagged form.
-    """
-    session_stage_tag = "fiber_session"
+    """Return {stage: [flag, value, ...]} for the method token injection
+    across the full fiber-kit chain.  See the module-level table above
+    for the complete input/output contract of each stage."""
     return {
         "fiber-session":    ["--method", method],
         "fiber-realign":    ["--variant", method],
         "fiber-refine":     ["--out-method", method],
-        "fiber-peel":       ["--cpos-method", method, "--clu-method", method,
-                              "--clu-stage", session_stage_tag],
-        "fiber-intrachunk": ["--cpos-method", method, "--clu-method", method,
-                              "--clu-stage", session_stage_tag],
-        "fiber-link":       ["--cpos-method", method, "--clu-method", method,
-                              "--clu-stage", session_stage_tag],
+        "fiber-cpos":       ["--spk-method",  method,
+                              "--clu-method",  method,
+                              "--out-method",  method,
+                              "--clu-stage",   "refine",
+                              "--out-stage",   "refine"],
+        # fiber-peel / fiber-intrachunk / fiber-link read cpos-stage=refine
+        # by default (fiber-refine's output), which is what we want now
+        # that fiber-cpos has written .cpos.<m>.<g>.refine for them.
+        "fiber-peel":       ["--cpos-method", method, "--clu-method", method],
+        "fiber-intrachunk": ["--cpos-method", method, "--clu-method", method],
+        "fiber-link":       ["--cpos-method", method, "--clu-method", method],
     }
 
 
@@ -616,20 +628,31 @@ class _FiberKitBase(SorterAdapter):
             return False, "fiber_kit not installed (`pip install ns3-sort-bench[fiber-kit]`)"
         return True, ""
 
+    # Chain order matters: fiber-cpos sits BETWEEN fiber-refine and
+    # fiber-peel because (a) it reads the refine-tagged .clu/.spk, and
+    # (b) fiber-link requires the .cpos.<m>.<g>.refine.clusters.npz file
+    # fiber-cpos produces (fiber-link has NO on-the-fly localizer
+    # fallback, unlike fiber-intrachunk which does).
     _MODE_STAGES = {
         "fiber_kit": ["fiber-session", "fiber-realign", "fiber-refine",
+                      "fiber-cpos",
                       "fiber-peel", "fiber-intrachunk", "fiber-link"],
         "fiber_kit_no_deconv": ["fiber-session", "fiber-realign", "fiber-refine",
+                                 "fiber-cpos",
                                  "fiber-peel", "fiber-intrachunk", "fiber-link"],
         "fiber_kit_session": ["fiber-session"],
     }
 
     # Default `.clu.<variant>.<group>.<tag>` tag written by the LAST stage of
-    # each mode's chain.  fiber-session writes `fiber_session`; fiber-link
-    # suffixes `_linked`; so the end-of-chain product is one of these.
+    # each mode's chain.
+    #   fiber-session mode: fiber-session writes tag `fiber_session`.
+    #   full chains:        fiber-link's default --out-stage is
+    #                       "<clu-stage>_linked"; with cpos-stage=refine
+    #                       (fiber-cpos's output), that resolves to
+    #                       "refine_linked".
     _MODE_FINAL_TAG = {
-        "fiber_kit":            "fiber_session_linked",
-        "fiber_kit_no_deconv":  "fiber_session_linked",
+        "fiber_kit":            "refine_linked",
+        "fiber_kit_no_deconv":  "refine_linked",
         "fiber_kit_session":    "fiber_session",
     }
 
@@ -805,15 +828,30 @@ class _FiberKitBase(SorterAdapter):
             for stage, flags in _stage_method_flags(_NS3_METHOD).items():
                 if stage in per_stage_args:
                     per_stage_args[stage] = flags + per_stage_args[stage]
-            # fiber-realign's default --clu is the LEGACY untagged
-            # <base>.clu.<group>, which does not exist in a method+stage-
-            # tagged session.  Point it at fiber-session's actual output.
+            # Session-specific input paths — two stages' input-clu lookup
+            # defaults don't match the method-tagged names we produce:
+            #
+            #   fiber-realign  default --clu = legacy UNTAGGED
+            #                  <base>.clu.<group>; we point it at
+            #                  fiber-session's <...>.clu.standard.<g>.fiber_session
+            #   fiber-refine   default --in-clu lookup is
+            #                  prefer_canonical() = ["", "stderiv", "D"]
+            #                  which doesn't include "standard".  Without
+            #                  --in-clu, fiber-refine silently starts a
+            #                  fresh fine sort instead of reading
+            #                  fiber-realign's output (<...>.clu.standard.<g>).
+            session_clu = _klusters_path(sess_base, "clu", group,
+                                            method=_NS3_METHOD)
+            fs_clu       = f"{session_clu}.fiber_session"
+            realign_out  = session_clu                         # canonical, no tag
             if "fiber-realign" in per_stage_args:
-                fs_clu = _klusters_path(sess_base, "clu", group,
-                                           method=_NS3_METHOD)
-                fs_clu = f"{fs_clu}.fiber_session"
                 per_stage_args["fiber-realign"] = [
                     "--clu", fs_clu, *per_stage_args["fiber-realign"]
+                ]
+            if "fiber-refine" in per_stage_args:
+                per_stage_args["fiber-refine"] = [
+                    "--in-clu", realign_out,
+                    *per_stage_args["fiber-refine"],
                 ]
 
         with measure_runtime() as rt:

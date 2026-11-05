@@ -531,28 +531,89 @@ def test_stage_method_flags_names_each_chain_stage_correctly():
     for stage in _FiberKitBase._MODE_STAGES["fiber_kit"]:
         assert stage in flags, f"missing stage {stage!r} in _stage_method_flags"
 
-    # Spot-check each stage's flag matches its argparse signature
+    # Spot-check each stage's flag matches its argparse signature + the
+    # correct chain wiring for a materialised-standard recording.
     assert flags["fiber-session"]    == ["--method", "standard"]
     assert flags["fiber-realign"]    == ["--variant", "standard"]   # NOT --method
     assert flags["fiber-refine"]     == ["--out-method", "standard"]
-    # fiber-peel / intrachunk / link also thread --clu-stage=fiber_session
-    # so they read fiber-session's .clu instead of defaulting to
-    # cpos-stage=refine (which assumes a stderiv lab-session chain).
+    # fiber-cpos is new in the chain between fiber-refine and fiber-peel:
+    # it reads fiber-refine's .clu.<m>.<g>.refine and writes the
+    # .cpos.<m>.<g>.refine.clusters.npz that fiber-link REQUIRES.
+    assert flags["fiber-cpos"]       == ["--spk-method", "standard",
+                                          "--clu-method", "standard",
+                                          "--out-method", "standard",
+                                          "--clu-stage", "refine",
+                                          "--out-stage", "refine"]
+    # fiber-peel / intrachunk / link use the DEFAULT cpos-stage=refine
+    # (fiber-cpos's output tag).  Previous iteration wrongly forced
+    # --clu-stage=fiber_session, which pointed them at fiber-session's
+    # output and broke fiber-link's cpos lookup.
     assert flags["fiber-peel"]       == ["--cpos-method", "standard",
-                                          "--clu-method", "standard",
-                                          "--clu-stage", "fiber_session"]
+                                          "--clu-method", "standard"]
     assert flags["fiber-intrachunk"] == ["--cpos-method", "standard",
-                                          "--clu-method", "standard",
-                                          "--clu-stage", "fiber_session"]
+                                          "--clu-method", "standard"]
     assert flags["fiber-link"]       == ["--cpos-method", "standard",
-                                          "--clu-method", "standard",
-                                          "--clu-stage", "fiber_session"]
+                                          "--clu-method", "standard"]
 
     # `--method` never appears bare on the stages that don't accept it
     for stage in ("fiber-realign", "fiber-refine", "fiber-peel",
                   "fiber-intrachunk", "fiber-link"):
         assert "--method" not in flags[stage], (
             f"{stage} would be invoked with --method, which it does not accept"
+        )
+
+
+def test_full_chain_order_has_cpos_between_refine_and_link():
+    """Full fiber_kit chain MUST run fiber-cpos before fiber-link.
+
+    fiber-link reads `.cpos.<m>.<g>.<cpos-stage>.clusters.npz` with
+    `np.load` and has no on-the-fly localizer fallback (unlike
+    fiber-intrachunk), so the file must exist at call time — it is
+    fiber-cpos that writes it.  Observed failure on hc1_full:
+        fiber-link FileNotFoundError: sim_session.cpos.standard.1.refine.clusters.npz
+    """
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+
+    for mode in ("fiber_kit", "fiber_kit_no_deconv"):
+        stages = _FiberKitBase._MODE_STAGES[mode]
+        assert "fiber-cpos" in stages, f"{mode}: no fiber-cpos in chain"
+        assert "fiber-link" in stages, f"{mode}: no fiber-link in chain"
+        assert "fiber-refine" in stages, f"{mode}: no fiber-refine in chain"
+        # Order: refine → cpos → link (peel/intrachunk may appear between
+        # cpos and link; just pin "cpos is after refine and before link").
+        i_refine = stages.index("fiber-refine")
+        i_cpos   = stages.index("fiber-cpos")
+        i_link   = stages.index("fiber-link")
+        assert i_refine < i_cpos < i_link, (
+            f"{mode} chain order wrong: {stages}"
+        )
+
+
+def test_full_chain_final_tag_matches_link_output_stage():
+    """_MODE_FINAL_TAG for the full chains must equal fiber-link's
+    actual output stage given the wired --cpos-stage.  fiber-link writes
+    `<clu-stage>_linked` by default; our chain inherits
+    cpos-stage=refine (default) → `.clu.<m>.<g>.refine_linked`.
+
+    If someone reinstates --clu-stage=fiber_session on peel/intrachunk/link
+    without also changing the final-tag constant, the readback at end-of-
+    sort will miss the actual file; this pin catches the drift.
+    """
+    from ns3_sort_bench.adapters.fiber_kit import (
+        _FiberKitBase, _stage_method_flags,
+    )
+    for mode in ("fiber_kit", "fiber_kit_no_deconv"):
+        final = _FiberKitBase._MODE_FINAL_TAG[mode]
+        link_flags = _stage_method_flags("standard")["fiber-link"]
+        # No explicit --clu-stage / --cpos-stage means fiber-link defaults
+        # to cpos-stage=refine, so the final tag must be refine_linked.
+        assert "--clu-stage" not in link_flags, (
+            "fiber-link should not override --clu-stage; the full chain "
+            "wiring already passes fiber-cpos's refine output through."
+        )
+        assert final == "refine_linked", (
+            f"_MODE_FINAL_TAG[{mode!r}] = {final!r}, "
+            "but the wiring produces refine_linked"
         )
 
 
