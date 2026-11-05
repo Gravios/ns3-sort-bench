@@ -152,6 +152,57 @@ def _fresh_artifacts_dir(root: str, slug: str) -> str:
     return path
 
 
+def _resolve_user_fk_config(explicit: Optional[str] = None, *,
+                            quiet: bool = False,
+                            ) -> "tuple[Optional[str], str]":
+    """Which user tuning yaml a fiber_kit sort merges, and where it came from.
+
+    Search order (fiber-kit's own ``load_global_config`` order, before the
+    adapter repoints ``FK_CONFIG`` at the merged file): an explicit
+    ``fk_config_path``, else ``$FK_CONFIG``, else ``./fiber-kit.yaml`` in
+    the current folder.  Returns ``(path, origin)``, or ``(None, origin)``
+    when nothing is merged.
+
+    A named file that does not exist is reported, not silently skipped, and
+    does NOT fall through to the next source (the earlier behaviour).  The
+    implicit ``./fiber-kit.yaml`` is the easy one to miss — the same command
+    run from another folder sorts differently — so picking it up is
+    reported on stderr.
+    """
+    for name, cand in (("fk_config_path", explicit),
+                       ("$FK_CONFIG", os.environ.get("FK_CONFIG") or None)):
+        if cand:
+            if os.path.isfile(cand):
+                return cand, name
+            if not quiet:
+                print(f"ns3sb fiber_kit: {name} {cand!r} not found — "
+                      "sorting without user tuning", file=sys.stderr)
+            return None, f"{name} {cand!r} not found"
+    cwd_cfg = os.path.join(os.getcwd(), "fiber-kit.yaml")
+    if os.path.isfile(cwd_cfg):
+        if not quiet:
+            print(f"ns3sb fiber_kit: merging {cwd_cfg} from the current "
+                  "folder (set $FK_CONFIG to choose a tuning file "
+                  "explicitly)", file=sys.stderr)
+        return cwd_cfg, "./fiber-kit.yaml in the current folder"
+    return None, "none"
+
+
+def fk_config_digest(path: str) -> str:
+    """sha256 of a written fiber-kit.yaml, comment lines excluded.
+
+    Two sorts with the same digest ran with the same merged tuning and plan,
+    whatever folder or header text they were written with.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for line in f:
+            if not line.lstrip().startswith(b"#"):
+                h.update(line)
+    return h.hexdigest()
+
+
 def _bandpass(traces: np.ndarray, sr: float,
               low: float = _BAND_HZ[0], high: float = _BAND_HZ[1]) -> np.ndarray:
     """4th-order Butterworth bandpass along axis 0.  Returns float64."""
@@ -827,10 +878,8 @@ class _FiberKitBase(SorterAdapter):
         if auto_overrides:
             merged.update(auto_overrides)       # auto > baseline
 
-        user_path = (user_cfg_path
-                      or os.environ.get("FK_CONFIG")
-                      or os.path.join(os.getcwd(), "fiber-kit.yaml"))
-        if user_path and os.path.isfile(user_path):
+        user_path, origin = _resolve_user_fk_config(user_cfg_path)
+        if user_path is not None:
             try:
                 with open(user_path) as f:
                     loaded = _yaml.safe_load(f) or {}
@@ -842,6 +891,7 @@ class _FiberKitBase(SorterAdapter):
                 # on-disk file so the user can spot the ignore.
                 merged.setdefault("# WARNING",
                                    f"ignored unreadable {user_path!r}")
+                origin = f"{origin}, unreadable, ignored"
 
         # Flat FK_* map: emit by hand so string values that LOOK like
         # YAML 1.1 booleans (off/on/yes/no/true/false) stay quoted while
@@ -868,9 +918,14 @@ class _FiberKitBase(SorterAdapter):
                 "# Written by ns3_sort_bench.adapters.fiber_kit when it "
                 "materialised\n"
                 "# this session from a SpikeInterface BaseRecording.\n"
-                "# Merge of configs/fiber_kit.yaml `fiber_kit:` baseline +\n"
-                f"# user tuning from {user_path!r}.  User keys WIN.\n"
-                "# Keep quoted `off/on` strings — YAML 1.1 reads bare "
+                "# Merge of configs/fiber_kit.yaml `fiber_kit:` baseline"
+                + (" + auto overrides" if auto_overrides else "")
+                + ("\n# + user tuning from "
+                   f"{user_path!r} ({origin}).  User keys WIN.\n"
+                   if user_path is not None
+                   else "\n# + no user tuning (no fk_config_path, $FK_CONFIG "
+                        "or ./fiber-kit.yaml).\n")
+                + "# Keep quoted `off/on` strings — YAML 1.1 reads bare "
                 "off/on as bools.\n"
             )
             for k, v in merged.items():
@@ -904,6 +959,7 @@ class _FiberKitBase(SorterAdapter):
 
         sess_base = recording.get_annotation("session_base", None)
         tmp_dir = None
+        fk_provenance: Dict[str, Any] = {}
         materialised = False
         keep_artifacts = False
         if sess_base is None:
@@ -969,6 +1025,14 @@ class _FiberKitBase(SorterAdapter):
                 auto_overrides=auto_overrides,
             )
             env["FK_CONFIG"] = fk_config
+            fk_cfg_source, fk_cfg_origin = _resolve_user_fk_config(
+                kwargs.get("fk_config_path"), quiet=True)
+            fk_provenance = dict(
+                fk_config_user=fk_cfg_source,
+                fk_config_user_origin=fk_cfg_origin,
+                fk_config_auto_overrides=sorted(auto_overrides),
+                fk_config_sha256=fk_config_digest(fk_config),
+            )
 
         # Inject the method token on auto-materialised runs so every stage
         # resolves our raw .spk.standard.<g> / .res.standard.<g> files
@@ -1060,7 +1124,8 @@ class _FiberKitBase(SorterAdapter):
                     stage_results[stage_tag] = stage_result
 
         extras = dict(mode=self._mode, electrode_group=group,
-                       variant=variant, tag=tag, session_base=sess_base)
+                       variant=variant, tag=tag, session_base=sess_base,
+                       **fk_provenance)
         if stage_results:
             extras["stage_results"] = stage_results
         # Cleanup policy, in order of precedence:
