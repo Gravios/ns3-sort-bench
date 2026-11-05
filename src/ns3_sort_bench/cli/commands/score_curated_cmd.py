@@ -54,12 +54,20 @@ from ...curation import curate_diff, _read_clu, _read_res
 _METHOD_TOKEN   = "standard"   # mirrors klusters_export._NS3_METHOD
 _GROUP          = 1
 _RAW_TAG_FOR_SORTER = {
-    # fiber-kit variants write .clu.standard.1.fiber_session (session mode)
-    # or .clu.standard.1.fiber_session_linked (full chain) — see
-    # adapters/fiber_kit.py::_MODE_FINAL_TAG.
-    "fiber_kit":            "fiber_session_linked",
-    "fiber_kit_no_deconv":  "fiber_session_linked",
+    # fiber-kit variants write the .clu whose tag is their mode's
+    # end-of-chain tag — kept in sync with adapters/fiber_kit.py's
+    # _MODE_FINAL_TAG.  Post-patch-0016, fiber_kit dispatches through
+    # the fiber-pipeline driver and writes exp_final; fiber_kit_no_deconv
+    # still runs the legacy per-stage chain and writes refine_linked;
+    # fiber_kit_session stops at fiber_session.
+    "fiber_kit":            "exp_final",
+    "fiber_kit_no_deconv":  "refine_linked",
     "fiber_kit_session":    "fiber_session",
+    # Per-stage dirs that patch 0018 writes (klusters_fiber_kit_<stage>/):
+    # each carries the single stage's .clu, named by the stage tag itself.
+    "fiber_kit_fiber_session":  "fiber_session",
+    "fiber_kit_fs_clean":       "fs_clean",
+    "fiber_kit_exp_xcm":        "exp_xcm",
     # SI-wrapped sorters: klusters_export writes the .clu under the adapter
     # slug (no fiber-style suffix); the raw tag MATCHES the slug.  We fall
     # back to a scan when the sorter isn't listed here.
