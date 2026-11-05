@@ -50,6 +50,7 @@ from .adapters.fiber_kit import (
     _NS3_METHOD, _NS_SAMPLES, _NS_PEAK,
     _RES_DTYPE, _programs_yaml_section, _run_ndm, _bandpass,
     _NDM_DETECT_DEFAULTS,
+    _write_probe_file, _channel_locations_or_default,
 )
 
 _CLU_DTYPE = np.dtype("<i4")
@@ -98,38 +99,46 @@ def _write_yaml_with_programs(path: str, *, n_ch: int, sr: float,
                                 n_samples: int = _NS_SAMPLES,
                                 peak_sample: int = _NS_PEAK,
                                 n_features: int = 3,
-                                noise_duration_s: float = 10.0) -> None:
+                                noise_duration_s: float = 10.0,
+                                probe_path: Optional[str] = None) -> None:
     """Session yaml with a `programs:` block whose rate-dependent knobs
     are rewritten for ``sr`` — mirrors adapters/fiber_kit.py's
     ``_materialise_recording``, so an exported session matches a
     sort-time session byte-for-byte on the ndm params that depend on
-    the recording."""
+    the recording.
+
+    `probe_path`, when given, is written under the top-level ``probe:``
+    key so fiber-intrachunk / fiber-cpos can localise clusters.
+    """
     import yaml
     refractory_samples  = max(1, int(round(0.5e-3 * float(sr))))    # 0.5 ms
     peak_search_samples = int(n_samples)                             # snippet width
+    doc: dict = {
+        "parameters": {"version": "1.0",
+                        "creator": "ns3-sort-bench:klusters-export"},
+        "acquisitionSystem": dict(
+            nBits=16, nChannels=int(n_ch),
+            voltageRange=20, amplification=1000,
+            offset=0, samplingRate=float(sr),
+        ),
+    }
+    if probe_path:
+        doc["probe"] = probe_path
+    doc["spikeDetection"] = {"channelGroups": [dict(
+        channels=list(range(n_ch)),
+        nSamples=int(n_samples),
+        peakSampleIndex=int(peak_sample),
+        nFeatures=int(n_features),
+    )]}
+    doc["programs"] = _programs_yaml_section(overrides={
+        "ndm_detectspikes": {
+            "refractoryPeriod":  str(refractory_samples),
+            "peakSearchLength":  str(peak_search_samples),
+            "duration":          f"{noise_duration_s:g}",
+        },
+    })
     with open(path, "w") as f:
-        yaml.safe_dump({
-            "parameters": {"version": "1.0",
-                            "creator": "ns3-sort-bench:klusters-export"},
-            "acquisitionSystem": dict(
-                nBits=16, nChannels=int(n_ch),
-                voltageRange=20, amplification=1000,
-                offset=0, samplingRate=float(sr),
-            ),
-            "spikeDetection": {"channelGroups": [dict(
-                channels=list(range(n_ch)),
-                nSamples=int(n_samples),
-                peakSampleIndex=int(peak_sample),
-                nFeatures=int(n_features),
-            )]},
-            "programs": _programs_yaml_section(overrides={
-                "ndm_detectspikes": {
-                    "refractoryPeriod":  str(refractory_samples),
-                    "peakSearchLength":  str(peak_search_samples),
-                    "duration":          f"{noise_duration_s:g}",
-                },
-            }),
-        }, f, sort_keys=False)
+        yaml.safe_dump(doc, f, sort_keys=False)
 
 
 def _materialise_shared_files(recording, base: str,
@@ -159,12 +168,18 @@ def _materialise_shared_files(recording, base: str,
     traces_filt = _bandpass(np.asarray(traces, np.float64), sr)
     np.clip(np.rint(traces_filt), -32768, 32767).astype(np.int16).tofile(fil_path)
     _link_or_copy(fil_path, dat_path)
+    # Write the probe file beside the session yaml so an exported
+    # Klusters session is also fiber-intrachunk-friendly in case anyone
+    # re-runs the chain from the export dir.
+    probe_path = base + ".probe"
+    _write_probe_file(probe_path, _channel_locations_or_default(recording, n_ch))
     noise_s = min(float(_NDM_DETECT_DEFAULTS.get("duration", "10")),
                    (n_samp / sr) * 0.5)
     _write_yaml_with_programs(
         yaml_path, n_ch=n_ch, sr=sr,
         n_samples=n_samples, peak_sample=peak_sample,
         n_features=n_features, noise_duration_s=noise_s,
+        probe_path=probe_path,
     )
 
 

@@ -469,6 +469,72 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
     )
 
 
+# ─── probe-file writer for fiber-cpos / fiber-intrachunk ─────────────────────
+# fiber-intrachunk runs the fiber-cpos localiser on-the-fly when no
+# precomputed .cpos.<method>.<g>.<stage>.clusters.npz exists; the localiser
+# reads probe geometry from a NeuroSuite .probe YAML:
+#
+#     probeFile:
+#       sites:
+#         geometry:
+#           - [x, y]       # µm
+#           - [x, y]
+#           ...
+#
+# fiber-kit (fiber_localize.load_geometry) raises
+#   "no probeFile.sites.geometry"
+# when the key is missing, and fiber-intrachunk raises
+#   "no fiber-cpos table and no probe geometry to compute one"
+# when the probe path itself is absent from the session yaml.  On a from-
+# scratch SpikeInterface recording the probe file doesn't exist on disk
+# — we write it from `recording.get_channel_locations()`, which the
+# SpikeForest paired loaders and NS3RecordingExtractor both populate (the
+# mountainsort5 log confirms a 4-channel linear 0/25/50/75-µm layout for
+# PAIRED_CRCNS_HC1).
+def _write_probe_file(path: str, locations_xy: np.ndarray) -> None:
+    """Write a minimal NeuroSuite .probe YAML with the channel geometry.
+
+    `locations_xy` is (n_channels, 2) in µm.  fiber-kit's load_geometry()
+    reads doc["probeFile"]["sites"]["geometry"] and nothing else here.
+    """
+    import yaml
+    xy = np.asarray(locations_xy, float)
+    if xy.ndim != 2 or xy.shape[1] != 2:
+        raise ValueError(f"locations_xy must be (n, 2); got {xy.shape}")
+    doc = {
+        "probeFile": {
+            "sites": {
+                "geometry": [[float(x), float(y)] for x, y in xy],
+                "count_per_shank": int(xy.shape[0]),
+            },
+            "label": "ns3-sort-bench-materialised",
+        },
+    }
+    with open(path, "w") as f:
+        yaml.safe_dump(doc, f, sort_keys=False)
+
+
+def _channel_locations_or_default(recording, n_ch: int) -> np.ndarray:
+    """Read `recording.get_channel_locations()` if available; fall back to
+    a linear 25-µm-spaced tetrode layout (0, 25, ..., 25·(n-1)) so the
+    probe file is always writable.  The default matches mountainsort5's
+    fallback on PAIRED_CRCNS_HC1 (same 0/25/50/75-µm shape observed in
+    its log) and is good enough for fiber-cpos to localise within one
+    group — the sorter's own geometry handling uses the SI recording
+    directly, this file only feeds the fiber-kit localiser.
+    """
+    try:
+        locs = recording.get_channel_locations()
+    except (AttributeError, Exception):               # noqa: BLE001
+        locs = None
+    locs = np.asarray(locs) if locs is not None else None
+    if (locs is None or locs.ndim != 2 or locs.shape[0] != n_ch
+            or locs.shape[1] < 2):
+        y = 25.0 * np.arange(n_ch, dtype=float)
+        return np.column_stack([np.zeros(n_ch, float), y])
+    return np.ascontiguousarray(locs[:, :2].astype(float))
+
+
 # ─── per-stage method-token + input-clu argparse flags ──────────────────────
 # Each fiber-kit stage names the method token under a DIFFERENT argparse
 # flag, AND the later stages need to know where the previous stage's .clu
@@ -855,11 +921,27 @@ class _FiberKitBase(SorterAdapter):
         refractory_samples  = max(1, int(round(0.5e-3 * sr)))      # 0.5 ms
         peak_search_samples = int(_NS_SAMPLES)                     # snippet width
 
+        # Write a minimal .probe YAML next to the session.  fiber-intrachunk
+        # needs the probe to on-the-fly-localise clusters when no
+        # fiber-cpos table exists — observed failure on hc1_full:
+        #   "[intrachunk] no fiber-cpos table and no probe geometry to
+        #    compute one: run fiber-cpos first, or name a probe in
+        #    <session>.yaml / pass --probe"
+        # The session yaml's `probe:` key points at this file.
+        probe_path = base + ".probe"
+        _write_probe_file(probe_path,
+                            _channel_locations_or_default(recording, n_ch))
+
         yml = {
             "parameters": {"version": "1.0", "creator": "ns3-sort-bench"},
             "acquisitionSystem": dict(nBits=16, nChannels=int(n_ch),
                                        voltageRange=20, amplification=1000,
                                        offset=0, samplingRate=sr),
+            # Named probe — fiber-kit's cfg.get("probe") returns this path,
+            # which fiber_localize.load_geometry then opens.  Keep it a
+            # single string (fiber-kit also accepts a list for multi-shank
+            # sessions; one shank → one path.)
+            "probe": probe_path,
             "spikeDetection": {"channelGroups": [dict(
                 channels=list(range(n_ch)),
                 nSamples=_NS_SAMPLES, peakSampleIndex=_NS_PEAK, nFeatures=3,

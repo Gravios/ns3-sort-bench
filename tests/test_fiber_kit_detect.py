@@ -453,6 +453,66 @@ def test_materialise_recording_programs_block_follows_sample_rate(tmp_path):
     assert p20["method"]          == "standard"
 
 
+def test_materialise_recording_writes_probe_and_references_it(tmp_path):
+    """fiber-intrachunk / fiber-cpos need a `probe:` key in the session
+    yaml pointing at a NeuroSuite .probe file.  _materialise_recording
+    must write both.
+
+    Regression for hc1_full fiber-intrachunk failure:
+        "[intrachunk] no fiber-cpos table and no probe geometry to
+         compute one: run fiber-cpos first, or name a probe in
+         <session>.yaml / pass --probe"
+    """
+    import yaml
+    from ns3_sort_bench.adapters.fiber_kit import _FiberKitBase
+    adapter = _FiberKitBase.__new__(_FiberKitBase)
+    sr = 20000.0
+    traces = np.zeros((int(sr * 2), 4), dtype=np.int16)
+    rec = _FakeRec(traces, sr)
+    base = adapter._materialise_recording(rec, str(tmp_path))
+
+    probe = Path(base + ".probe")
+    assert probe.exists(), "no .probe file written"
+
+    # fiber_kit.fiber_localize.load_geometry reads this exact shape:
+    doc = yaml.safe_load(probe.read_text())
+    geo = doc["probeFile"]["sites"]["geometry"]
+    assert isinstance(geo, list) and len(geo) == 4
+    for xy in geo:
+        assert len(xy) == 2
+        assert all(isinstance(v, (int, float)) for v in xy)
+
+    # Session yaml points at it
+    sess = yaml.safe_load(Path(base + ".yaml").read_text())
+    assert sess["probe"] == str(probe)
+
+
+def test_channel_locations_default_is_linear_tetrode():
+    """When the recording has no channel_locations, the default geometry
+    must be a sensible linear layout matching mountainsort5's observed
+    PAIRED_CRCNS_HC1 fallback (0, 25, 50, 75 µm)."""
+    from ns3_sort_bench.adapters.fiber_kit import _channel_locations_or_default
+
+    class _NoLocs:
+        def get_channel_locations(self):  raise AttributeError
+    xy = _channel_locations_or_default(_NoLocs(), 4)
+    assert xy.shape == (4, 2)
+    assert xy[:, 0].tolist() == [0.0, 0.0, 0.0, 0.0]            # same column
+    assert xy[:, 1].tolist() == [0.0, 25.0, 50.0, 75.0]         # 25-µm pitch
+
+
+def test_channel_locations_default_reads_recording_when_set():
+    """When the recording DOES carry channel locations, use them verbatim."""
+    from ns3_sort_bench.adapters.fiber_kit import _channel_locations_or_default
+
+    class _WithLocs:
+        def get_channel_locations(self):
+            return np.array([[10.0, 0.0], [10.0, 30.0], [40.0, 15.0]],
+                            dtype=float)
+    xy = _channel_locations_or_default(_WithLocs(), 3)
+    assert xy.tolist() == [[10.0, 0.0], [10.0, 30.0], [40.0, 15.0]]
+
+
 def test_stage_method_flags_names_each_chain_stage_correctly():
     """Every stage in the full fiber_kit chain has an entry in
     `_stage_method_flags`, and each entry uses the argparse flag that
