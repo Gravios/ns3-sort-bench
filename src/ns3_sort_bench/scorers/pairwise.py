@@ -29,7 +29,18 @@ def _assemble_label_array(sr: SortedResult, delta_frames: int = 0,
     (not n_unique_times), with `labels[i]` = unit id of the i-th spike.
     When `index_space` is given, labels are projected onto its grid by
     nearest-match within `delta_frames` — unmatched slots get label -1.
-    Used to align independent detections onto a common axis."""
+
+    Projection is a greedy nearest-neighbour BIPARTITE match: each slot
+    in `index_space` claims its nearest unused candidate within tolerance,
+    and each candidate matches at most one slot.  The walk direction is
+    slot-driven (not candidate-time-driven) so that on dense candidate
+    streams against sparse reference grids (e.g. 5 000 sort spikes vs
+    100 juxta-GT spikes) the match counts the real nearest-neighbour
+    pairs instead of being dominated by whichever candidate happened to
+    arrive first in time order.  Previously the direction was reversed,
+    which collapsed n_matched_spikes / n_cand_units on sorts that
+    over-cluster noise — see the hc1 curated case in the Nov-5 log.
+    """
     # Flatten into (time, unit)
     times, labels = [], []
     for u in sr.unit_ids:
@@ -43,26 +54,50 @@ def _assemble_label_array(sr: SortedResult, delta_frames: int = 0,
     if index_space is None:
         return times, labels
 
-    # Project onto index_space by nearest-time within delta_frames
+    # Project onto index_space by greedy nearest-neighbour bipartite match.
     ix = np.full(len(index_space), -1, np.int64)
     if times.size == 0 or len(index_space) == 0:
         return index_space, ix
 
-    j = np.searchsorted(index_space, times)
-    for k, t in enumerate(times):
-        # Check j[k] and j[k]-1 for closest within tolerance
-        best = -1; best_d = delta_frames + 1
-        for cand in (j[k] - 1, j[k]):
-            if 0 <= cand < len(index_space):
-                d = abs(int(index_space[cand]) - int(t))
-                if d <= delta_frames and d < best_d:
-                    best = cand; best_d = d
-        if best >= 0 and ix[best] == -1:
-            # First-come-first-matched; a strict ground-truth alignment uses
-            # the Hungarian match offered by SpikeInterface, which is more
-            # expensive and only matters when candidate spike densities are
-            # much higher than ref.
-            ix[best] = int(labels[k])
+    index_space = np.asarray(index_space, np.int64)
+    taken = np.zeros(times.size, dtype=bool)
+    # For each slot in index_space, find its insertion point within the
+    # (sorted) candidate times — the two candidates at j-1 and j span
+    # the slot.  GT spikes are much sparser than the detection grid in
+    # every realistic use (|index_space| << |times|), so the near-
+    # neighbour check is always among those two.
+    j = np.searchsorted(times, index_space)
+    for i, tref in enumerate(index_space):
+        best_k = -1; best_d = delta_frames + 1
+        # Walk a few neighbours in each direction in case the closer
+        # one is already taken; stop as soon as we see a candidate
+        # strictly outside tolerance (times is sorted, so there's no
+        # point continuing).
+        # Left side:
+        k = j[i] - 1
+        while 0 <= k < times.size:
+            d = int(tref) - int(times[k])
+            if d > delta_frames:
+                break
+            if not taken[k] and d < best_d:
+                best_k = k; best_d = d
+                # The closest-unused-on-the-left is the best candidate
+                # on this side; no earlier left-neighbour can be closer.
+                break
+            k -= 1
+        # Right side:
+        k = j[i]
+        while 0 <= k < times.size:
+            d = int(times[k]) - int(tref)
+            if d > delta_frames:
+                break
+            if not taken[k] and d < best_d:
+                best_k = k; best_d = d
+                break
+            k += 1
+        if best_k >= 0:
+            ix[i] = int(labels[best_k])
+            taken[best_k] = True
     return index_space, ix
 
 
