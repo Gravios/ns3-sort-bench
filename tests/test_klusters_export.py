@@ -161,6 +161,57 @@ def test_export_klusters_session_includes_ground_truth(tmp_path, monkeypatch):
                                                          "klusters_ground_truth"}
 
 
+def test_export_klusters_session_hardlinks_fil_across_sorters(tmp_path, monkeypatch):
+    """Full-sweep runs materialise the SAME bandpassed trace into every
+    `klusters_<sorter>/<item>/sim_session.fil`.  The export must hardlink
+    (same inode) the .fil across sorters — on 40 sorters a few hundred MB
+    of .fil per sorter is ~10 GB of avoidable copies.
+    """
+    corpus = _make_corpus("items_shared")
+    cands = {
+        "fiber_kit_session": SortedResult(
+            unit_ids=[2], spike_times={2: np.array([100, 200], np.int64)},
+            sampling_rate=20000.0, adapter="fiber_kit_session",
+            corpus_item="items_shared",
+        ),
+        "kilosort4": SortedResult(
+            unit_ids=[3], spike_times={3: np.array([150, 250], np.int64)},
+            sampling_rate=20000.0, adapter="kilosort4",
+            corpus_item="items_shared",
+        ),
+        "mountainsort5": SortedResult(
+            unit_ids=[4], spike_times={4: np.array([170], np.int64)},
+            sampling_rate=20000.0, adapter="mountainsort5",
+            corpus_item="items_shared",
+        ),
+    }
+    monkeypatch.setattr(_subprocess, "run", _Runner())
+
+    export_klusters_session(str(tmp_path / "runs"), corpus, cands)
+    out = Path(tmp_path / "runs")
+
+    fils = [
+        out / "klusters_fiber_kit_session" / "items_shared" / "sim_session.fil",
+        out / "klusters_kilosort4"         / "items_shared" / "sim_session.fil",
+        out / "klusters_mountainsort5"     / "items_shared" / "sim_session.fil",
+        out / "klusters_ground_truth"      / "items_shared" / "sim_session.fil",
+    ]
+    for f in fils:
+        assert f.exists(), f"{f} missing"
+
+    # Hardlinks share an inode; a cross-FS fallback copies but still matches
+    # bytes.  Require bytes-match always, inode-match on the common case
+    # (same tmp dir — same filesystem — hardlink should succeed).
+    first_bytes = fils[0].read_bytes()
+    for f in fils[1:]:
+        assert f.read_bytes() == first_bytes
+    inodes = {f.stat().st_ino for f in fils}
+    assert len(inodes) == 1, (
+        f"{len(inodes)} inodes across {len(fils)} .fil files — dedup missing; "
+        "each sorter wrote its own on-disk copy"
+    )
+
+
 def test_export_klusters_session_without_gt_skips_it(tmp_path, monkeypatch):
     corpus = _make_corpus("item_b")
     cand = SortedResult(

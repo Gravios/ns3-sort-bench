@@ -173,11 +173,18 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
                              *, group: int = 1,
                              n_samples: int = _NS_SAMPLES,
                              peak_sample: int = _NS_PEAK,
-                             method: str = _NS3_METHOD) -> str:
+                             method: str = _NS3_METHOD,
+                             shared_from: Optional[str] = None) -> str:
     """Write a stand-alone Klusters session for one adapter's result.
 
     Writes .fil + .yaml + .res + .clu directly; runs `ndm_extractspikes`
     and `ndm_pca` on the generated yaml to produce .spk + .fet + .pca.
+
+    `shared_from` names the ``<base>`` of a session dir already populated
+    with `.fil` / `.dat` / `.yaml` — when given, this call hardlinks those
+    files into the new session dir instead of writing a second on-disk copy.
+    Caller (``export_klusters_session``) uses this to dedupe the identical
+    .fil across every sorter's session dir on a full-sweep run.
 
     Returns the session directory, suitable for ``klusters <dir>/sim_session.yaml``.
     """
@@ -187,15 +194,40 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
     os.makedirs(sess_dir, exist_ok=True)
     base = os.path.join(sess_dir, "sim_session")
 
-    # Shared .fil + .dat + .yaml.  Hardlink from a lab session if available.
-    # Klusters reads <base>.dat; fiber-session reads <base>.fil.  Lab sessions
-    # may have one or the other (or both) — hardlink whichever exists into the
-    # name the consumer expects.
+    # Shared .fil + .dat + .yaml.  Three sources, in order of preference:
+    #
+    #   1. `shared_from` — an earlier session dir in this same export pass
+    #      (the shared-files dedup across sorters).  Hardlinks all three
+    #      files from there instead of rebuilding them.
+    #   2. A lab session's existing .fil/.dat/.yaml, when the recording
+    #      came from one (annotated as `session_base`).  Hardlinks from
+    #      the lab path.
+    #   3. Build them from the SpikeInterface recording in-memory — the
+    #      fully from-scratch case.
+    #
+    # Klusters reads <base>.dat; fiber-session reads <base>.fil.  Either
+    # hardlink path mirrors adapters/fiber_kit.py::_materialise_recording's
+    # ".dat ↔ .fil hardlink" so both consumers find what they expect.
     recording = corpus.recording
     sess_base = recording.get_annotation("session_base", None) \
                 if hasattr(recording, "get_annotation") else None
-    if sess_base and (os.path.exists(sess_base + ".fil")
-                      or os.path.exists(sess_base + ".dat")):
+    if shared_from and (os.path.exists(shared_from + ".fil")
+                         or os.path.exists(shared_from + ".dat")):
+        src_fil = shared_from + ".fil" if os.path.exists(shared_from + ".fil") \
+                  else shared_from + ".dat"
+        _link_or_copy(src_fil, base + ".fil")
+        _link_or_copy(src_fil, base + ".dat")
+        if os.path.exists(shared_from + ".yaml"):
+            _link_or_copy(shared_from + ".yaml", base + ".yaml")
+        else:
+            _write_yaml_with_programs(
+                base + ".yaml",
+                n_ch=recording.get_num_channels(),
+                sr=recording.get_sampling_frequency(),
+                n_samples=n_samples, peak_sample=peak_sample,
+            )
+    elif sess_base and (os.path.exists(sess_base + ".fil")
+                         or os.path.exists(sess_base + ".dat")):
         src = sess_base + ".fil" if os.path.exists(sess_base + ".fil") \
               else sess_base + ".dat"
         _link_or_copy(src, base + ".fil")
@@ -256,11 +288,36 @@ def export_klusters_session(output_dir: str, corpus: Corpus,
     is true and the corpus has a non-empty ground truth, it is exported as
     a pseudo-adapter under ``klusters_ground_truth/<item>/`` on equal
     footing with the real sorters.
+
+    Shared-files dedup: the ``.fil`` / ``.dat`` / ``.yaml`` carried by every
+    per-adapter session are byte-identical across sorters for a given corpus
+    item — only the ``.res`` / ``.clu`` / ``.spk`` / ``.fet`` / ``.pca``
+    differ per sort.  Materialising .fil once and hardlinking it into each
+    adapter's session dir costs one on-disk copy total instead of one per
+    sorter (40 sorters × a few hundred MB per .fil is where this starts to
+    matter).  The first adapter to export writes the real file; every later
+    adapter hardlinks it, falling back to a copy on cross-filesystem tmp.
     Returns the list of per-adapter session dirs written.
     """
     results = dict(candidates)
     if include_ground_truth and corpus.ground_truth is not None \
             and "ground_truth" not in results:
         results["ground_truth"] = corpus.ground_truth
-    return [export_adapter_session(output_dir, corpus, name, result, **kw)
-            for name, result in results.items()]
+    adapter_names = list(results)
+
+    # Materialise the shared .fil/.dat/.yaml once into the FIRST adapter's
+    # session dir, then pass that dir to the rest of the exports as a
+    # hardlink source.  Preserves per-adapter session self-containedness
+    # (every dir still has its own file names) without n copies of the
+    # bytes.
+    anchor_base: Optional[str] = None
+    out_dirs: list[str] = []
+    for name in adapter_names:
+        anchor = anchor_base    # None for the first, populated afterwards
+        sess_dir = export_adapter_session(output_dir, corpus, name,
+                                            results[name],
+                                            shared_from=anchor, **kw)
+        out_dirs.append(sess_dir)
+        if anchor_base is None:
+            anchor_base = os.path.join(sess_dir, "sim_session")
+    return out_dirs
