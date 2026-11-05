@@ -169,7 +169,17 @@ def cmd_summary(args) -> int:
         index=["corpus_item", "candidate_adapter"],
         columns="metric",
         aggfunc="first",
+        sort=False,       # keep scores.csv row order so pipeline stages
+                          # render in plan order (fiber_session →
+                          # fs_clean → exp_xcm), not alphabetical.
     )
+    # Pivot with sort=False keeps candidate_adapter order, but the
+    # corpus_item level may still interleave poorly if a corpus has
+    # non-contiguous rows.  Re-sort the first level alone, by first-row
+    # order.  (A categorical index with the discovered order keeps that
+    # order stable across subsequent operations.)
+    corpus_order = list(dict.fromkeys(df["corpus_item"].tolist()))
+    piv = piv.reindex(corpus_order, level="corpus_item")
     # Column order: when the user named metrics, keep their order; else
     # take the compact _DEFAULT_COLS set (dropping any that don't exist in
     # the pivot) and append the rest at the end so nothing is silently lost.
@@ -200,19 +210,51 @@ def cmd_summary(args) -> int:
     return 0
 
 
+def _split_stage_adapters(adapter_names: Sequence[str]
+                          ) -> "tuple[list[str], dict[str, list[str]]]":
+    """Partition a list of candidate_adapter names into primaries and
+    per-primary stage rows.
+
+    A stage row's name is ``"<primary>@<stage_tag>"`` (today: emitted by
+    the fiber_kit adapter — fiber_kit@fiber_session, fiber_kit@fs_clean,
+    fiber_kit@exp_xcm).  Primaries keep their input order; per-primary
+    stage lists also keep theirs, so a caller that sorted the input by
+    plan discovery order gets plan order out.
+
+    Returns (primaries, {primary: [stage_full_names, ...]}).  The second
+    map is keyed by primary name and lists the FULL stage adapter names
+    (not bare stage tags) so a pivot lookup still hits.
+    """
+    primaries: list[str] = []
+    stages_by_primary: dict[str, list[str]] = {}
+    for name in adapter_names:
+        s = str(name)
+        if "@" in s:
+            primary, _ = s.split("@", 1)
+            stages_by_primary.setdefault(primary, []).append(s)
+        else:
+            primaries.append(s)
+    return primaries, stages_by_primary
+
+
 def _print_org(piv, *, decimals: int) -> None:
     """Emit one org-style table per corpus_item, newline-separated.
 
     `piv` is a pandas DataFrame indexed by (corpus_item, candidate_adapter)
     with one column per metric.  The rendered column names come from
     `_METRIC_ALIASES`; count-like columns render as integers.
+
+    Pipeline stages (adapter names of the form ``<primary>@<tag>``) are
+    pulled out of the main table and printed as separate sub-tables
+    beneath it so the primary sorters' scoreboard stays uncluttered.
     """
     import math
 
     metrics = list(piv.columns)
     numeric_mask = [True] * (1 + len(metrics))                 # all cols right-aligned
     numeric_mask[0] = False                                     # adapter name stays left
-    headers = ["adapter"] + [_short(m) for m in metrics]
+    headers_main   = ["adapter"] + [_short(m) for m in metrics]
+    headers_stages = ["stage"]   + [_short(m) for m in metrics]
 
     corpora = piv.index.get_level_values("corpus_item").unique()
     for ci, corpus in enumerate(corpora):
@@ -220,14 +262,68 @@ def _print_org(piv, *, decimals: int) -> None:
             print()
         print(f"# {corpus}")
         sub = piv.xs(corpus, level="corpus_item")
+        # Partition in the pivot's own adapter order (which pandas took
+        # from the scores.csv rows, i.e. BenchmarkRun.go's write order —
+        # plan order for the stage rows).
+        primaries, stages_by_primary = _split_stage_adapters(sub.index.tolist())
+
+        # Main table — primaries only.
         rows = []
-        for adapter, row in sub.iterrows():
-            cells = [str(adapter)]
+        for adapter in primaries:
+            row = sub.loc[adapter]
+            cells = [adapter]
             for m in metrics:
-                v = row.get(m)
-                cells.append(_fmt_cell(v, decimals, _is_count_metric(m)))
+                cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
             rows.append(cells)
-        print(_org_table(headers, rows, numeric_mask))
+        print(_org_table(headers_main, rows, numeric_mask))
+
+        # Per-primary stage sub-tables.  Only primaries that actually have
+        # stage rows get one; if neither the primary nor its stages got
+        # filtered out, we include a trailing `<primary>@exp_final`-equivalent
+        # row — the primary row itself — so the reader sees the whole chain
+        # (fiber_session → fs_clean → exp_xcm → <primary>) in one block.
+        for primary in primaries:
+            stage_names = stages_by_primary.get(primary)
+            if not stage_names:
+                continue
+            print()
+            print(f"## {primary} stages")
+            stage_rows = []
+            for full_name in stage_names:
+                row = sub.loc[full_name]
+                _, stage_tag = full_name.split("@", 1)
+                cells = [stage_tag]
+                for m in metrics:
+                    cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
+                stage_rows.append(cells)
+            # End-of-chain row: the primary itself, labelled with its
+            # mode-final tag (today: fiber_kit → exp_final).  Pulling
+            # from the extras would need a cross-reference; the label
+            # "final" is clear enough given the section heading.
+            row = sub.loc[primary]
+            cells = ["final"]
+            for m in metrics:
+                cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
+            stage_rows.append(cells)
+            print(_org_table(headers_stages, stage_rows, numeric_mask))
+
+        # Orphan stage groups: stage rows whose primary isn't in this
+        # slice (e.g. --adapter fiber_kit@exp_xcm alone).  Still render
+        # them so the filter doesn't silently drop rows.
+        for primary, stage_names in stages_by_primary.items():
+            if primary in primaries or not stage_names:
+                continue
+            print()
+            print(f"## {primary} stages (primary not shown)")
+            stage_rows = []
+            for full_name in stage_names:
+                row = sub.loc[full_name]
+                _, stage_tag = full_name.split("@", 1)
+                cells = [stage_tag]
+                for m in metrics:
+                    cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
+                stage_rows.append(cells)
+            print(_org_table(headers_stages, stage_rows, numeric_mask))
 
 
 # ─── compare ────────────────────────────────────────────────────────────────

@@ -177,6 +177,79 @@ def test_summary_org_multi_corpus_prints_two_tables(tmp_path):
     assert out.count("|-") >= 2
 
 
+def test_summary_org_separates_pipeline_stages_from_primaries(tmp_path):
+    """Pipeline stage adapters (named `<primary>@<tag>`) must render in a
+    `## <primary> stages` sub-table beneath the main one — the primary
+    sorters' scoreboard stays uncluttered, and the stages sit next to
+    their primary with the final-chain `final` row for a continuous
+    read.
+    """
+    rundir = tmp_path / "stages_run"
+    rundir.mkdir()
+    # Rows in plan order so the stage sub-table renders in plan order
+    # (we pivot with sort=False to honour this).
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", "sim1", "gt", "botm_ref",   "best_unit_accuracy_mean", 0.00),
+        ("per_cell", "sim1", "gt", "kilosort4",  "best_unit_accuracy_mean", 0.05),
+        ("per_cell", "sim1", "gt", "fiber_kit",  "best_unit_accuracy_mean", 0.048),
+        ("per_cell", "sim1", "gt", "fiber_kit@fiber_session",
+                                                "best_unit_accuracy_mean", 0.044),
+        ("per_cell", "sim1", "gt", "fiber_kit@fs_clean",
+                                                "best_unit_accuracy_mean", 0.046),
+        ("per_cell", "sim1", "gt", "fiber_kit@exp_xcm",
+                                                "best_unit_accuracy_mean", 0.047),
+    ])
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+
+    # Main table + sub-table have their own heading levels.
+    assert "# sim1" in out
+    assert "## fiber_kit stages" in out
+    # Main table lists only primaries (one row each; the `@` rows go
+    # below).
+    main_block = out.split("## fiber_kit stages")[0]
+    stages_block = out.split("## fiber_kit stages")[1]
+    assert "| fiber_kit "  in main_block
+    assert "fiber_session" not in main_block     # stages left to sub-table
+    assert "fs_clean"      not in main_block
+    assert "exp_xcm"       not in main_block
+    assert "fiber_kit@"    not in main_block     # "@" format kept out
+
+    # Sub-table carries the three stages in plan order + the `final` row.
+    i_fs    = stages_block.index("fiber_session")
+    i_clean = stages_block.index("fs_clean")
+    i_xcm   = stages_block.index("exp_xcm")
+    i_final = stages_block.index("final")
+    assert i_fs < i_clean < i_xcm < i_final
+    # The sub-table's first column header is `stage`, not `adapter`.
+    assert "| stage " in stages_block
+    # And its separator is org-style.
+    assert "+-" in stages_block.split("| stage")[1]
+
+
+def test_summary_org_no_stages_section_when_no_stage_rows(tmp_path):
+    """Adapters with no `@<tag>` rows must not produce an empty
+    `## <primary> stages` block.
+    """
+    rundir = tmp_path / "no_stages"
+    rundir.mkdir()
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", "sim1", "gt", "fiber_kit",  "best_unit_accuracy_mean", 0.048),
+        ("per_cell", "sim1", "gt", "kilosort4",  "best_unit_accuracy_mean", 0.051),
+    ])
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+    assert "## " not in out, "no stage sub-sections should appear"
+
+
 def test_compare_delta_and_only_regressed(tmp_path):
     """compare: delta = B - A; --only-regressed drops delta>=0 rows."""
     a_dir = tmp_path / "A"
