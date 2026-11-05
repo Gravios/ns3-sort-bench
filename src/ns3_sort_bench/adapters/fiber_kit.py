@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from typing import Any, Dict, Mapping, Optional
 
@@ -126,6 +127,29 @@ def _slugify(name: str) -> str:
     parts = [p for p in out.split("_") if p]
     slug = "_".join(parts) or "sort"
     return slug[:200]   # keep room for the .fiber-session.log etc. names
+
+
+def _fresh_artifacts_dir(root: str, slug: str) -> str:
+    """Return ``<root>/<slug>``, empty, for one fiber_kit sort.
+
+    The folder is reused across runs into the same ``--out``.  fiber-pipeline
+    deliberately consumes outputs already on disk (``_pf_on_disk``, the
+    method resolver's family match, realign's in-place commits), so a
+    leftover ``.clu``/``.res``/``.spk`` from an earlier run — older code or
+    other settings — fed silently into the next one (the second hc1_full
+    run: 29 fiber_session clusters, recall 0.15, against 16 / 0.21 from a
+    fresh folder).  Clearing it makes ``--keep-fk-artifacts`` keep the
+    artifacts of *this* run only.
+    """
+    if slug in ("", ".", ".."):
+        raise ValueError(f"fiber_kit adapter: unsafe artifacts slug {slug!r}")
+    path = os.path.join(root, slug)
+    if os.path.isdir(path) and os.listdir(path):
+        print(f"ns3sb fiber_kit: clearing artifacts from an earlier run in "
+              f"{path}", file=sys.stderr)
+        shutil.rmtree(path)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def _bandpass(traces: np.ndarray, sr: float,
@@ -889,10 +913,10 @@ class _FiberKitBase(SorterAdapter):
                 # Persistent mode: place the session dir under the caller's
                 # artifacts root, named by the corpus item (slugified).  The
                 # dir is NOT deleted after the sort finishes — its full
-                # contents survive for post-hoc inspection.
+                # contents survive for post-hoc inspection — but it IS
+                # emptied before the sort starts (see _fresh_artifacts_dir).
                 slug = _slugify(str(kwargs.get("corpus_name") or "sort"))
-                tmp_dir = os.path.join(fk_artifacts_dir, slug)
-                os.makedirs(tmp_dir, exist_ok=True)
+                tmp_dir = _fresh_artifacts_dir(fk_artifacts_dir, slug)
                 keep_artifacts = True
             else:
                 tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
