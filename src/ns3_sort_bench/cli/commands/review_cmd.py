@@ -163,12 +163,40 @@ def _load_scores(run_dir: Path):
             cdf = cdf[cdf["stage"] == "curated"].copy()
             cdf["candidate_adapter"] = cdf["sorter"] + "@curated"
             cdf["reference_adapter"] = "ground_truth"
+            # score-curated iterates the on-disk klusters_<sorter>/<item>/
+            # directory tree, where <item> is the SLUGIFIED corpus_item
+            # (`:` → `_`, etc.).  scores.csv holds the ORIGINAL
+            # corpus_item.  Reverse-map here so the curated row shares a
+            # corpus_item value with its primary — otherwise summary
+            # renders two separate blocks ("primary not shown") for the
+            # same item.
+            slug_to_original = {_slugify_corpus_item(ci): ci
+                                 for ci in df["corpus_item"].astype(str).unique()}
+            cdf["corpus_item"] = cdf["corpus_item"].astype(str).map(
+                lambda s: slug_to_original.get(s, s)
+            )
             cdf = cdf[["reference_adapter", "candidate_adapter",
                         "scorer", "corpus_item", "metric", "value"]]
             # Concat; pandas tolerates the column superset (scores.csv
             # may carry extra columns the curated run didn't produce).
             df = pd.concat([df, cdf], ignore_index=True)
     return df
+
+
+# Characters _slugify keeps (mirrors adapters.fiber_kit._SLUG_SAFE); every
+# other character becomes `_` and consecutive underscores collapse.  This
+# is the SAME algorithm klusters_export uses when it builds its
+# klusters_<sorter>/<slug>/ directory names, so the summary-side reverse
+# map stays in sync without a cross-module import.
+_SLUG_KEEP = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                  "0123456789._+-")
+
+
+def _slugify_corpus_item(name: str) -> str:
+    out = "".join(c if c in _SLUG_KEEP else "_" for c in name)
+    parts = [p for p in out.split("_") if p]
+    slug = "_".join(parts) or "sort"
+    return slug[:200]
 
 
 # ─── summary ────────────────────────────────────────────────────────────────

@@ -289,6 +289,55 @@ def test_summary_merges_curated_scores_csv_as_stage_rows(tmp_path):
     assert "| raw" not in stages_block
 
 
+def test_summary_curated_slug_reverse_maps_to_scores_corpus_item(tmp_path):
+    """score-curated writes curated_scores.csv using the SLUGIFIED
+    corpus_item (its only handle is the klusters_<sorter>/<item>/
+    directory name, which is slugified).  scores.csv keeps the original
+    (colon-separated, in the user's case).  Without a reverse map the
+    two land in different per-corpus blocks and the curated row renders
+    orphaned under "primary not shown" — exactly the hc1_full run's
+    symptom.
+
+    Fix: _load_scores reverse-maps the slug back to the scores.csv
+    corpus_item by slugifying every unique scores.csv corpus_item and
+    using it as a lookup.
+    """
+    rundir = tmp_path / "slug_test"
+    rundir.mkdir()
+    original = "PAIRED_CRCNS_HC1:paired_crcns:d11221_d11221.001"
+    slug     = "PAIRED_CRCNS_HC1_paired_crcns_d11221_d11221.001"
+
+    _write_scores(rundir / "scores.csv", [
+        ("per_cell", original, "gt", "fiber_kit", "best_unit_accuracy_mean", 0.048),
+    ])
+    import pandas as pd
+    pd.DataFrame([
+        ("fiber_kit", slug, "curated", "per_cell",
+         "best_unit_accuracy_mean", 0.42),
+    ], columns=["sorter", "corpus_item", "stage",
+                "scorer", "metric", "value"]
+    ).to_csv(rundir / "curated_scores.csv", index=False)
+
+    from ns3_sort_bench.cli.main import main
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main(["summary", str(rundir)])
+    out = buf.getvalue()
+    assert rc == 0
+
+    # ONE section header for the corpus — the slug-form must NOT appear
+    # as its own section.
+    assert out.count(f"# {original}") == 1
+    # The slug form appears NOWHERE in the output (every curated row
+    # was remapped to the original).
+    assert slug not in out
+    # And "primary not shown" (the orphan-stage fallback) must not fire.
+    assert "primary not shown" not in out
+    # The curated row ended up in the stage sub-table for fiber_kit.
+    assert "## fiber_kit stages" in out
+    assert "curated" in out.split("## fiber_kit stages")[1]
+
+
 def test_summary_without_curated_scores_csv_is_unchanged(tmp_path):
     """Safety guard: when curated_scores.csv is absent, the summary is
     identical to the pre-patch behaviour — the merge is strictly
