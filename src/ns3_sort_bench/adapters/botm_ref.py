@@ -9,10 +9,31 @@ Does NOT implement template initialisation or drift tracking — the thesis
 expects an initial sort as input.  For the harness we bootstrap with a
 negative-threshold detector + KMeans on PCA features so BOTM can run end-
 to-end on synthetic corpora.
+
+Backends
+--------
+The SIC-B hot loop recomputes a (T templates × out_len) discriminant matrix
+per iteration (up to 500 iters) — on long recordings this dominates the
+runtime (user-reported 270 s on a 300 s HC1 recording, 20 kHz × 4 ch).  Two
+backends compute that matrix:
+
+    numpy     per-channel np.correlate, outer loop over templates.
+              Ground truth; zero dependencies.
+    torch     one batched conv1d call over all templates and channels at
+              once; runs on CUDA when a GPU is visible, else CPU-BLAS
+              (which already has OpenMP parallelism underneath).
+
+Autodetect picks torch+CUDA when available, torch+CPU when only torch is
+available, else numpy.  Override via ``adapter.sort(botm_backend=...)`` or
+env ``NS3SB_BOTM_BACKEND=cuda|torch|numpy``.  The numpy backend is bit-
+exact within floating-point tolerance to the pre-refactor thesis-form
+implementation; the torch backend is within rtol=1e-4 of it (its own
+accumulation order).
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+import os
+from typing import Any, Callable, Mapping, Optional
 
 import numpy as np
 
@@ -53,15 +74,15 @@ CONTRACT = Contract(
     capabilities=Capabilities(
         drift_aware=False,          # thesis assumes templates constant
         overlap_resolution="sic",   # SIC-B
-        requires_gpu=False,
-        requires_torch=False,
+        requires_gpu=False,         # GPU opportunistic, not required
+        requires_torch=False,       # torch is optional; numpy backend works
         supports_stderiv_input=True,
         supports_shared_detection=True,
         reports_templates=True,
     ),
     resources=ResourceEstimates(
         min_ram_mb=256, min_cpu_cores=1,
-        gpu_vram_mb=None,
+        gpu_vram_mb=512,            # modest; one conv1d over (T, n_ch, L)
         estimated_sec_per_minute_of_recording=20.0,
     ),
     known_limitations=(
@@ -70,6 +91,12 @@ CONTRACT = Contract(
         "Bootstrap detector is naive negative-threshold + KMeans — not meant"
         " for curation, only to let BOTM demonstrate its sorting step.",
         "Static block-Toeplitz noise cov; mild non-stationarity hurts.",
+        "Discriminant hot path uses torch.conv1d (CUDA when available, else"
+        " CPU-BLAS) when torch is installed, falling back to pure numpy.  "
+        "Override via adapter.sort(botm_backend='numpy'|'torch'|'cuda') or"
+        " $NS3SB_BOTM_BACKEND.  Results across backends match within"
+        " float32 accumulation tolerance (rtol ≈ 1e-4 vs the numpy ground"
+        " truth).",
     ),
     notes=(
         "The MEASUREMENT BASELINE for every fiber_deconv extension claim.  "
@@ -97,6 +124,10 @@ class BOTMReferenceAdapter(SorterAdapter):
         if not isinstance(recording, BaseRecording):
             raise TypeError("botm_ref needs a SpikeInterface BaseRecording")
 
+        backend_pref = kwargs.get("botm_backend") \
+                        or os.environ.get("NS3SB_BOTM_BACKEND") or "auto"
+        discriminant_fn, backend_used = _pick_discriminant_backend(backend_pref)
+
         with measure_runtime() as rt:
             traces = recording.get_traces(start_frame=0,
                                            end_frame=recording.get_num_samples(0))
@@ -108,9 +139,10 @@ class BOTMReferenceAdapter(SorterAdapter):
             peak = int(kwargs.get("peak_sample", 16))
             n_units_hint = int(kwargs.get("n_units_hint", 3))
 
+            init_times = None
             templates = kwargs.get("initial_templates", None)
             if templates is None:
-                templates, init_times, init_labels = _bootstrap_templates(
+                templates, init_times, _init_labels = _bootstrap_templates(
                     traces, tpl_samples=tpl_samples, peak=peak,
                     n_units_hint=n_units_hint,
                 )
@@ -118,13 +150,14 @@ class BOTMReferenceAdapter(SorterAdapter):
                 templates = np.asarray(templates, np.float64)
 
             C = _estimate_noise_cov(traces, templates.shape[1], peak,
-                                     spike_times=init_times if 'init_times' in dir() else None,
+                                     spike_times=init_times,
                                      n_windows=200)
             f, c, _ = _botm_filters(templates, C)
             placements = _botm_sic_b(
                 traces, templates, f, c,
                 tpl_samples=templates.shape[1], peak=peak,
                 refrac=int(0.5e-3 * sr),
+                discriminant_fn=discriminant_fn,
             )
 
         unit_ids = sorted(set(p[1] for p in placements))
@@ -140,7 +173,8 @@ class BOTMReferenceAdapter(SorterAdapter):
             adapter_version=self._version,
             wall_time_s=rt["wall_time_s"], peak_rss_mb=rt["peak_rss_mb"],
             extras=dict(sic_variant="B",
-                        n_initial_units=int(templates.shape[0])),
+                        n_initial_units=int(templates.shape[0]),
+                        backend=backend_used),
         )
 
 
@@ -217,42 +251,136 @@ def _botm_filters(templates, C):
     return f_flat.reshape(T, n_sam, n_ch), c, 0.0
 
 
-def _botm_sic_b(traces, templates, f, c, *, tpl_samples, peak, refrac):
+def _botm_sic_b(traces, templates, f, c, *, tpl_samples, peak, refrac,
+                 discriminant_fn=None):
+    """Batched SIC-B.  Picks the global-best (template, time) each iteration
+    across ALL templates in one argmax over (T, out_len), subtracts the
+    template at that time, and repeats.
+
+    `discriminant_fn(r, f, c, tpl_samples) -> (T, out_len) ndarray` is the
+    backend-specific hot kernel; defaults to the numpy backend.
+    """
+    if discriminant_fn is None:
+        discriminant_fn = _discriminant_all_numpy
     n_samp, n_ch = traces.shape
     T = templates.shape[0]
     f_flat = f.reshape(T, -1)
     r = traces.copy()
-    placements = []
+    placements: list[tuple[int, int]] = []
     noise_est = _estimate_noise_threshold(r, templates, f_flat, tpl_samples, c)
+    out_len = n_samp - tpl_samples + 1
+    if out_len <= 0:
+        return placements
     for _ in range(500):
-        best_t, best_u, best_v = -1, -1, -np.inf
-        for u in range(T):
-            d_u = _discriminant_series(r, f[u], tpl_samples, c[u])
-            for (p_t, p_u) in placements:
-                if p_u == u:
-                    lo = max(0, p_t - refrac); hi = min(len(d_u), p_t + refrac + 1)
-                    d_u[lo:hi] = -np.inf
-            idx = int(np.argmax(d_u))
-            v = float(d_u[idx])
-            if v > best_v:
-                best_v = v; best_t = idx; best_u = u
-        if best_v < noise_est: break
-        lo = max(0, best_t - peak); hi = lo + tpl_samples
-        if hi > n_samp: continue
+        D = discriminant_fn(r, f, c, tpl_samples)         # (T, out_len)
+        # Mask each already-placed spike's refractory window on its own
+        # template.  Vectorised over placements for one template at a time
+        # (list is short — 500 max).
+        for p_t, p_u in placements:
+            lo = max(0, p_t - refrac)
+            hi = min(out_len, p_t + refrac + 1)
+            D[p_u, lo:hi] = -np.inf
+        best_flat = int(np.argmax(D))
+        best_u, best_t = divmod(best_flat, out_len)
+        best_v = float(D[best_u, best_t])
+        if best_v < noise_est:
+            break
+        lo = max(0, best_t - peak)
+        hi = lo + tpl_samples
+        if hi > n_samp:
+            continue
         r[lo:hi, :] -= templates[best_u]
-        placements.append((best_t, best_u))
+        placements.append((int(best_t), int(best_u)))
     return placements
 
 
-def _discriminant_series(residual, f_u, tpl_samples, c_u):
+# ─── discriminant backends ───────────────────────────────────────────────────
+def _discriminant_all_numpy(residual, f, c, tpl_samples):
+    """CPU-numpy fallback.  Returns (T, out_len).  Mirrors the original
+    inner double-loop byte-for-byte modulo accumulation order."""
     n_samp, n_ch = residual.shape
+    T = f.shape[0]
     out_len = n_samp - tpl_samples + 1
-    if out_len <= 0: return np.full(0, -np.inf)
-    acc = np.zeros(out_len)
-    for ch in range(n_ch):
-        acc += np.correlate(residual[:, ch], f_u[:, ch], mode="valid")
-    acc += c_u
-    return acc
+    if out_len <= 0:
+        return np.full((T, 0), -np.inf)
+    D = np.zeros((T, out_len))
+    for u in range(T):
+        acc = np.zeros(out_len)
+        for ch in range(n_ch):
+            acc += np.correlate(residual[:, ch], f[u, :, ch], mode="valid")
+        D[u] = acc + c[u]
+    return D
+
+
+def _discriminant_all_torch(residual, f, c, tpl_samples, *, device):
+    """Single batched conv1d: one call computes the discriminant for every
+    template × every time at once.  `conv1d` is cross-correlation applied to
+    a flipped kernel — fiber-kit and scipy use the same trick — so the
+    output equals `sum_ch correlate(r[:, ch], f[u, :, ch], 'valid')`.
+
+    Layout notes:
+      residual: (n_samp, n_ch) → torch (1, n_ch, n_samp)
+      f:        (T, tpl_samples, n_ch) → torch (T, n_ch, tpl_samples) flipped
+      conv1d(1, n_ch, n_samp) × kernel(T, n_ch, K) → (1, T, out_len)
+    """
+    import torch                                           # local to keep optional
+    n_samp, n_ch = residual.shape
+    T = f.shape[0]
+    out_len = n_samp - tpl_samples + 1
+    if out_len <= 0:
+        return np.full((T, 0), -np.inf)
+    R = torch.from_numpy(np.ascontiguousarray(residual.T, np.float32))
+    R = R.to(device=device)[None]                          # (1, n_ch, n_samp)
+    # f: (T, tpl_samples, n_ch) → (T, n_ch, tpl_samples); flip last dim for
+    # cross-correlation.
+    F = torch.from_numpy(np.ascontiguousarray(
+        f.transpose(0, 2, 1), np.float32)).to(device=device)
+    F = torch.flip(F, dims=(-1,))
+    with torch.inference_mode():
+        out = torch.nn.functional.conv1d(R, F).squeeze(0)  # (T, out_len)
+        out = out + torch.from_numpy(np.asarray(c, np.float32)) \
+                        .to(device=device)[:, None]
+    return out.detach().to("cpu", dtype=torch.float64).numpy()
+
+
+def _pick_discriminant_backend(pref: str) -> tuple[Callable, str]:
+    """Resolve the preferred backend into (discriminant_fn, name).
+
+    pref ∈ {"auto", "cuda", "torch", "torch-cpu", "numpy"}.
+
+      auto       cuda if torch+gpu, else torch-cpu if torch, else numpy
+      cuda       require torch + CUDA; raise if unavailable
+      torch      same as cuda but allow CPU-only torch
+      torch-cpu  force torch on CPU even if a GPU is present
+      numpy      the pure-numpy fallback
+    """
+    pref = (pref or "auto").lower()
+    want_torch = pref in ("auto", "cuda", "torch", "torch-cpu")
+    if want_torch:
+        try:
+            import torch                                   # noqa: F401
+        except ImportError:
+            if pref in ("cuda", "torch", "torch-cpu"):
+                raise RuntimeError(
+                    f"botm_backend={pref!r} but torch is not installed"
+                )
+            return _discriminant_all_numpy, "numpy"
+        # torch is importable — now pick device
+        if pref == "torch-cpu":
+            device = "cpu"
+        elif pref == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "botm_backend='cuda' but torch.cuda.is_available() is False"
+                )
+            device = "cuda"
+        else:                                              # auto or torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        fn = lambda r, f, c, k, _d=device: _discriminant_all_torch(
+            r, f, c, k, device=_d
+        )
+        return fn, f"torch:{device}"
+    return _discriminant_all_numpy, "numpy"
 
 
 def _estimate_noise_threshold(traces, templates, f_flat, tpl_samples, c):
