@@ -28,18 +28,29 @@ run_kwargs:
   # middle for a 10-30 min CA1 session.
   scheme: 2
 
+  # Extracellular spikes are negative-going.  Upstream default is 0
+  # (either polarity), which doubles the hit count with mirror-image
+  # positive-going artifacts and makes the clusterer's life harder on
+  # CA1.  Set -1 to look only at negative peaks.
+  detect_sign: -1
+
   # Detection threshold in σ.  Upstream default is 5.5; 4.5 is more
   # permissive and useful on quiet CA1 traces where the smallest real
   # spikes sit close to the noise floor.  Move back up if the sort
   # inflates with false positives.
   detect_threshold: 4.5
 
-  # Cross-channel pooling radius for detection (µm).  Default (~50)
-  # was tuned for dense 20-µm-pitch probes; on a 4-channel tetrode
-  # with ~100-200 µm effective reach, 150 covers the real cell's
+  # Cross-channel pooling radius for detection (µm).  MS5 scheme 2
+  # has TWO separate radii (phase 1 training set vs phase 2 the big
+  # sort pass); set both to 150 µm — on a 4-channel tetrode with
+  # ~100-200 µm effective reach, 150 covers the real cell's
   # footprint without over-pooling noise from distant sites.  Scale
-  # with your probe's channel spacing.
-  detect_channel_radius: 150
+  # with your probe's channel spacing.  Upstream calls these
+  # `scheme2_phase1_detect_channel_radius` and
+  # `scheme2_detect_channel_radius` (NOT `detect_channel_radius` —
+  # that's a non-existent key and MS5 raises ValueError for it).
+  scheme2_phase1_detect_channel_radius: 150
+  scheme2_detect_channel_radius:        150
 
   # Snippet geometry (samples before and after the peak).  Matching
   # the pipeline's 32-sample Klusters convention (peak at 16) keeps

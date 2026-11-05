@@ -2,30 +2,41 @@
 # SpykingCircus 2 (via SpikeInterface) run_kwargs
 # ─────────────────────────────────────────────────────────────────────────────
 # Read by src/ns3_sort_bench/adapters/si_sorters.py::SpykingCircus2Adapter.
-# Passed verbatim as **run_kwargs to spikeinterface.sorters.run_sorter().
-# Users can merge on top at call time via adapter.sort(run_kwargs={...}).
+# Passed as **run_kwargs to spikeinterface.sorters.run_sorter().
 #
-# Motion correction can misfire on short recordings; the Contract
-# documents this.  Below is a first-guess retune for low-channel-count
-# in-vivo probes — validate against the reference session before
-# claiming improvements.
+# Key names verified against Spykingcircus2Sorter._default_params on SI
+# main (src/spikeinterface/sorters/internal/spyking_circus2.py).  Two
+# things matter:
+#
+#   1. Most knobs are NESTED (detection.method_kwargs.detect_threshold,
+#      general.radius_um, ...).  There is no top-level `detect_threshold`
+#      or `detect_radius` — SI raises "Invalid parameters" for those.
+#   2. SI merges user params with a SHALLOW dict.update
+#      (BaseSorter.set_params_to_folder).  Passing `detection:` REPLACES
+#      the whole default `detection` sub-dict, so every sub-key must be
+#      restated here, not just the one being changed.
+#
+# If your installed SI is older/newer, `ns3sb run --adapter spykingcircus2`
+# prints the valid top-level keys in the ValueError.
 # ─────────────────────────────────────────────────────────────────────────────
 
 run_kwargs:
-  # Drift correction off.  SC2's motion correction expects dense
-  # Neuropixels-style geometry; on a 4-8 channel probe it tries to
-  # fit a model from too few spikes and the regulariser drags the
-  # template away from the real cell.  Turn back on for ≥32-channel
-  # probes with a known drift signal.
+  # Motion correction off: SC2's dredge preset expects dense geometry;
+  # on a 4-8 channel probe it fits drift from too few spikes.
   apply_motion_correction: false
 
-  # Detection threshold (σ multiples).  Upstream default is 5; 4.5 is
-  # mildly more permissive and useful on quiet CA1 traces.  Raise
-  # back if the sort inflates with false positives.
-  detect_threshold: 4.5
+  # Full restatement of the `general` block (shallow merge) — only
+  # radius_um changes, 100 → 150 µm for tetrode-scale reach.
+  general:
+    ms_before: 0.5
+    ms_after:  1.5
+    radius_um: 150.0
 
-  # Cross-channel detection radius (µm).  Default (~50) assumes
-  # Neuropixels; on a tetrode scale the spatial reach is more like
-  # 100-200 µm, so a larger radius keeps the real cell's footprint
-  # together without over-pooling distant noise.
-  detect_radius: 150
+  # Full restatement of the `detection` block — only detect_threshold
+  # changes, 5 → 4.5 σ for quiet CA1 traces.
+  detection:
+    method: matched_filtering
+    method_kwargs:
+      peak_sign: neg
+      detect_threshold: 4.5
+    pipeline_kwargs: {}

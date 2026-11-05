@@ -115,56 +115,90 @@ def test_botm_ref_kwargs_still_override_config():
     assert resolve({"n_units_hint": 25}, "n_units_hint", 3) == 25
 
 
-def test_dartsort_config_loads_run_kwargs():
-    """DARTsort ships its baseline through the same ``run_kwargs:``
-    section SI-wrapped sorters use.  Guards against someone switching
-    DARTsort to a different schema and the adapter silently losing
-    every knob.
-    """
-    cfg = load_adapter_config("dartsort")
-    assert "run_kwargs" in cfg
-    rk = cfg["run_kwargs"]
-    assert isinstance(rk, dict)
-    # Motion estimation specifically pinned OFF — see yaml rationale.
+def test_dartsort_config_uses_dartsortuserconfig_field_names():
+    """dartsort run_kwargs must be DARTsortUserConfig field names (SI's
+    DartsortSorter does DARTsortUserConfig(**params)).  Pins the
+    verified keys and guards against the earlier guessed names
+    (detection_threshold / n_pca_features), which don't exist."""
+    rk = load_adapter_config("dartsort")["run_kwargs"]
     assert rk.get("do_motion_estimation") is False
-    # Detection threshold within a plausible sorter range (3-10).
-    assert 3.0 <= float(rk.get("detection_threshold")) <= 10.0
+    assert rk.get("peak_sign") == "neg"
+    for bad in ("detection_threshold", "n_pca_features"):
+        assert bad not in rk, f"{bad!r} is not a DARTsortUserConfig field"
 
 
 def test_dartsort_adapter_picks_up_config():
-    """The adapter module reads configs/dartsort.yaml at import time
-    and stores it in ``_DARTSORT_RUN_KWARGS``.  A stale import or a
-    rename would leave this empty.
-    """
     from ns3_sort_bench.adapters.dartsort import _DARTSORT_RUN_KWARGS
-    assert isinstance(_DARTSORT_RUN_KWARGS, dict)
-    # Spot-check: the baseline's load-bearing switch must be here.
     assert _DARTSORT_RUN_KWARGS.get("do_motion_estimation") is False
 
 
-def test_slay_config_splits_ks_and_merge_kwargs():
-    """slay.yaml carries two sub-blocks: ks_kwargs (forwarded to the
-    wrapped kilosort4 adapter) and slay_kwargs (its own NN-merge
-    knobs).  Keeping them distinct lets a user retune one without
-    disturbing the other.
-    """
+def test_mountainsort5_config_uses_valid_si_keys():
+    """Keys must be in Mountainsort5Sorter's default_params (the list
+    SI printed in the hc1 ValueError).  `detect_channel_radius` does
+    not exist — scheme 2 has two per-phase radius keys."""
+    valid = {
+        "scheme", "detect_threshold", "detect_sign", "detect_time_radius_msec",
+        "snippet_T1", "snippet_T2", "npca_per_channel", "npca_per_subdivision",
+        "snippet_mask_radius", "scheme1_detect_channel_radius",
+        "scheme2_phase1_detect_channel_radius", "scheme2_detect_channel_radius",
+        "scheme2_max_num_snippets_per_training_batch",
+        "scheme2_training_duration_sec",
+        "scheme2_training_recording_sampling_mode",
+        "scheme3_block_duration_sec", "freq_min", "freq_max", "filter",
+        "whiten", "whitening_seed", "delete_temporary_recording",
+        "pool_engine", "n_jobs", "chunk_duration", "progress_bar",
+        "mp_context", "max_threads_per_worker",
+    }
+    rk = load_adapter_config("mountainsort5")["run_kwargs"]
+    bad = set(rk) - valid
+    assert not bad, f"invalid MountainSort5 keys: {sorted(bad)}"
+
+
+def test_spykingcircus2_config_restates_full_nested_blocks():
+    """SC2 params are nested and SI merges with a SHALLOW dict.update,
+    so an overridden sub-dict must carry every sibling key or the
+    sorter KeyErrors on the missing ones at run time."""
+    rk = load_adapter_config("spykingcircus2")["run_kwargs"]
+    for bad in ("detect_threshold", "detect_radius"):
+        assert bad not in rk, f"{bad!r} is not a top-level SC2 key"
+    if "detection" in rk:
+        det = rk["detection"]
+        assert {"method", "method_kwargs", "pipeline_kwargs"} <= set(det)
+        assert {"peak_sign", "detect_threshold"} <= set(det["method_kwargs"])
+    if "general" in rk:
+        assert {"ms_before", "ms_after", "radius_um"} <= set(rk["general"])
+
+
+def test_tridesclous2_config_uses_valid_si_keys():
+    valid = {
+        "apply_preprocessing", "preprocessing_dict", "apply_motion_correction",
+        "motion_correction_preset", "clustering_ms_before", "clustering_ms_after",
+        "detection_radius_um", "features_radius_um", "split_radius_um",
+        "template_radius_um", "merge_similarity_lag_ms", "freq_min", "freq_max",
+        "cache_preprocessing_mode", "peak_sign", "detect_threshold",
+        "n_peaks_per_channel", "n_svd_components_per_channel", "n_pca_features",
+        "clustering_recursive_depth", "ms_before", "ms_after",
+        "template_sparsify_threshold", "template_min_snr_ptp",
+        "template_max_jitter_ms", "min_firing_rate", "gather_mode",
+        "job_kwargs", "seed", "save_array", "debug",
+    }
+    rk = load_adapter_config("tridesclous2")["run_kwargs"]
+    bad = set(rk) - valid
+    assert not bad, f"invalid Tridesclous2 keys: {sorted(bad)}"
+
+
+def test_slay_config_has_both_blocks_and_no_unverified_merge_kwargs():
+    """slay_kwargs feed a call wrapped in a bare `except: return []`, so
+    a wrong key fails SILENTLY (zero merges).  Keep it empty until a
+    key is verified against slay.merge.recommend_merges."""
     cfg = load_adapter_config("slay")
-    assert "ks_kwargs"   in cfg
-    assert "slay_kwargs" in cfg
-    assert isinstance(cfg["ks_kwargs"],   dict)
-    assert isinstance(cfg["slay_kwargs"], dict)
-    # Baseline puts merge_threshold in slay_kwargs — not in ks_kwargs.
-    assert "merge_threshold" in cfg["slay_kwargs"]
-    assert "merge_threshold" not in cfg["ks_kwargs"]
+    assert isinstance(cfg["ks_kwargs"], dict)
+    assert cfg["slay_kwargs"] == {}
 
 
 def test_slay_adapter_picks_up_both_blocks():
-    """The adapter module reads both blocks into separate module-level
-    dicts.  Each adapter call merges them over caller one-offs."""
     from ns3_sort_bench.adapters.slay import (
         _SLAY_KS_DEFAULTS, _SLAY_MERGE_DEFAULTS,
     )
-    assert isinstance(_SLAY_KS_DEFAULTS,    dict)
+    assert isinstance(_SLAY_KS_DEFAULTS, dict)
     assert isinstance(_SLAY_MERGE_DEFAULTS, dict)
-    # Spot-check the merge threshold baseline.
-    assert float(_SLAY_MERGE_DEFAULTS.get("merge_threshold")) > 0.0

@@ -1,32 +1,19 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # SLAy adapter config
 # ─────────────────────────────────────────────────────────────────────────────
-# Read by src/ns3_sort_bench/adapters/slay.py.  SLAy is a post-merge
-# layer on top of Kilosort 4; this file splits its tuning into two
-# blocks that are kept distinct because they fire at different stages:
+# Read by src/ns3_sort_bench/adapters/slay.py.  Two blocks:
 #
-#   ks_kwargs:   forwarded to the wrapped kilosort4 adapter's sort()
-#                call.  Shape matches configs/kilosort4.yaml's
-#                run_kwargs — any tuning here OVERRIDES kilosort4.yaml
-#                only for this slay invocation, and the harness's own
-#                run_kwargs={...} override still wins over this file.
+#   ks_kwargs:   forwarded to the wrapped kilosort4 adapter's sort().
+#                Empty = inherit configs/kilosort4.yaml.
+#   slay_kwargs: forwarded to slay.merge.recommend_merges(**kwargs).
 #
-#   slay_kwargs: forwarded to slay._slay_merges, which runs the
-#                neural-network merge classifier on the kilosort4
-#                output.  Thresholds here govern how aggressively
-#                slay reunites over-split clusters — higher threshold,
-#                fewer merges.
-#
-# Values below are first-guess; validate against the reference
-# session before shipping as the baseline.
+# slay_kwargs is deliberately EMPTY.  _slay_merges wraps the call in a
+# bare `except Exception: return []`, so an unrecognised kwarg would not
+# error — it would silently return zero merges and slay would equal
+# kilosort4.  Add keys here only after confirming them against the
+# installed slay's recommend_merges signature
+# (python3 -c "import inspect, slay.merge as m; print(inspect.signature(m.recommend_merges))").
 # ─────────────────────────────────────────────────────────────────────────────
 
-ks_kwargs: {}            # inherit configs/kilosort4.yaml wholesale
-
-slay_kwargs:
-  # Classifier score above which slay merges two kilosort4 clusters.
-  # The upstream default is ~0.9 (very conservative, few merges).
-  # 0.7 is more aggressive and recovers drift-split fragments that
-  # kilosort4 kept separate; 0.5 is the floor below which slay starts
-  # pulling in unrelated clusters.
-  merge_threshold: 0.7
+ks_kwargs: {}
+slay_kwargs: {}
