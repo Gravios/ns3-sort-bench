@@ -95,6 +95,31 @@ def _link_or_copy(src: str, dst: str) -> None:
         shutil.copy2(src, dst)
 
 
+def _relink(src: str, dst: str) -> None:
+    """Make `dst` a hardlink (or copy) of `src`, REPLACING any existing
+    `dst` that is not already the same file.  Unlike `_link_or_copy`,
+    a stale or partial `dst` left by an interrupted earlier run is not
+    silently reused."""
+    if os.path.exists(dst):
+        try:
+            if os.path.samefile(src, dst):
+                return
+        except OSError:
+            pass
+        os.remove(dst)
+    _link_or_copy(src, dst)
+
+
+def _fil_is_complete(path: str, n_samples: int, n_channels: int) -> bool:
+    """True when `path` exists and holds exactly n_samples × n_channels
+    int16 values — the only size a correct .fil for this recording can
+    have.  Catches truncated writes from an interrupted run."""
+    try:
+        return os.path.getsize(path) == int(n_samples) * int(n_channels) * 2
+    except OSError:
+        return False
+
+
 def _write_yaml_with_programs(path: str, *, n_ch: int, sr: float,
                                 n_samples: int = _NS_SAMPLES,
                                 peak_sample: int = _NS_PEAK,
@@ -158,12 +183,18 @@ def _materialise_shared_files(recording, base: str,
     fil_path = base + ".fil"
     dat_path = base + ".dat"
     yaml_path = base + ".yaml"
-    if os.path.exists(fil_path) and os.path.exists(dat_path) \
-            and os.path.exists(yaml_path):
-        return
     n_samp = int(recording.get_num_samples(0))
     n_ch = int(recording.get_num_channels())
     sr = float(recording.get_sampling_frequency())
+    # Idempotent only when the existing .fil is the right SIZE — an
+    # interrupted earlier run can leave a truncated .fil that ndm then
+    # fails to read ("-R mode requires .fil input file").
+    if _fil_is_complete(fil_path, n_samp, n_ch) and os.path.exists(dat_path) \
+            and os.path.exists(yaml_path):
+        return
+    for stale in (fil_path, dat_path):
+        if os.path.exists(stale):
+            os.remove(stale)
     traces = recording.get_traces(start_frame=0, end_frame=n_samp)
     traces_filt = _bandpass(np.asarray(traces, np.float64), sr)
     np.clip(np.rint(traces_filt), -32768, 32767).astype(np.int16).tofile(fil_path)
@@ -181,6 +212,64 @@ def _materialise_shared_files(recording, base: str,
         n_features=n_features, noise_duration_s=noise_s,
         probe_path=probe_path,
     )
+
+
+SHARED_DIRNAME = "shared_sessions"
+
+
+def shared_session_base(output_dir: str, corpus: Corpus) -> str:
+    """Absolute `<base>` of the per-item shared preprocessing dir:
+    ``<output_dir>/shared_sessions/<item>/sim_session``.  Deliberately
+    outside the ``klusters_*`` namespace so score-curated / inspect-clu
+    never mistake it for a sorter."""
+    return os.path.abspath(os.path.join(
+        output_dir, SHARED_DIRNAME, _slugify(corpus.name), "sim_session"))
+
+
+def prepare_shared_session(output_dir: str, corpus: Corpus, *,
+                            n_samples: int = _NS_SAMPLES,
+                            peak_sample: int = _NS_PEAK) -> str:
+    """Write the per-item ns3 preprocessing ONCE, before any sorter runs:
+    bandpassed ``.fil``, ``.dat`` (hardlink), ``.yaml`` and ``.probe``
+    under ``shared_sessions/<item>/``.  Every ``klusters_<sorter>/<item>/``
+    export then links from here, so all sorters share one physical
+    .fil/.dat regardless of which adapter exports first or whether an
+    earlier one failed.
+
+    A lab-session recording (annotated ``session_base``) links its
+    existing .fil/.dat instead of re-filtering.  Idempotent; a .fil of
+    the wrong size is rebuilt.  Returns the absolute shared base.
+    """
+    base = shared_session_base(output_dir, corpus)
+    os.makedirs(os.path.dirname(base), exist_ok=True)
+    recording = corpus.recording
+    n_samp = int(recording.get_num_samples(0))
+    n_ch = int(recording.get_num_channels())
+    sess_base = recording.get_annotation("session_base", None) \
+        if hasattr(recording, "get_annotation") else None
+    if sess_base and (os.path.exists(sess_base + ".fil")
+                       or os.path.exists(sess_base + ".dat")):
+        src = sess_base + ".fil" if os.path.exists(sess_base + ".fil") \
+            else sess_base + ".dat"
+        _relink(src, base + ".fil")
+        _relink(src, base + ".dat")
+        if not os.path.exists(base + ".yaml"):
+            if os.path.exists(sess_base + ".yaml"):
+                import shutil
+                shutil.copyfile(sess_base + ".yaml", base + ".yaml")
+            else:
+                _write_yaml_with_programs(
+                    base + ".yaml", n_ch=n_ch,
+                    sr=recording.get_sampling_frequency(),
+                    n_samples=n_samples, peak_sample=peak_sample)
+    else:
+        _materialise_shared_files(recording, base, n_samples=n_samples,
+                                    peak_sample=peak_sample)
+    if not _fil_is_complete(base + ".fil", n_samp, n_ch):
+        raise RuntimeError(
+            f"shared preprocessing produced an incomplete {base}.fil "
+            f"(expected {n_samp * n_ch * 2} bytes)")
+    return base
 
 
 def export_adapter_session(output_dir: str, corpus: Corpus,
@@ -230,10 +319,16 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
                          or os.path.exists(shared_from + ".dat")):
         src_fil = shared_from + ".fil" if os.path.exists(shared_from + ".fil") \
                   else shared_from + ".dat"
-        _link_or_copy(src_fil, base + ".fil")
-        _link_or_copy(src_fil, base + ".dat")
+        _relink(src_fil, base + ".fil")
+        _relink(src_fil, base + ".dat")
+        if os.path.exists(shared_from + ".probe"):
+            _relink(shared_from + ".probe", base + ".probe")
         if os.path.exists(shared_from + ".yaml"):
-            _link_or_copy(shared_from + ".yaml", base + ".yaml")
+            # COPY, not hardlink: ndm_* may write custody fields into the
+            # session yaml, and a shared inode would leak one sorter's
+            # edits into every other sorter's session.
+            import shutil
+            shutil.copyfile(shared_from + ".yaml", base + ".yaml")
         else:
             _write_yaml_with_programs(
                 base + ".yaml",
@@ -293,7 +388,15 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
     shutil.copyfile(res_path, f"{res_path}.raw")
 
     # Extract waveforms + features for THIS adapter's spike times via ndm_*.
-    session_yaml = base + ".yaml"
+    # Fail with a clear message if the .fil is missing / truncated rather
+    # than letting process_extractspikes report "-R mode requires .fil".
+    if not _fil_is_complete(base + ".fil", n_samp,
+                              int(recording.get_num_channels())):
+        raise RuntimeError(
+            f"{base}.fil is missing or truncated — expected "
+            f"{n_samp * int(recording.get_num_channels()) * 2} bytes; "
+            "re-run so prepare_shared_session rebuilds it")
+    session_yaml = os.path.abspath(base + ".yaml")
     log_dir = sess_dir
     _run_ndm("ndm_extractspikes", session_yaml,
               extra=["--method", method],
@@ -321,8 +424,9 @@ def export_klusters_session(output_dir: str, corpus: Corpus,
     differ per sort.  Materialising .fil once and hardlinking it into each
     adapter's session dir costs one on-disk copy total instead of one per
     sorter (40 sorters × a few hundred MB per .fil is where this starts to
-    matter).  The first adapter to export writes the real file; every later
-    adapter hardlinks it, falling back to a copy on cross-filesystem tmp.
+    matter).  The real file lives in ``shared_sessions/<item>/`` (written by
+    :func:`prepare_shared_session`); every adapter hardlinks it, falling
+    back to a copy on cross-filesystem tmp.
     Returns the list of per-adapter session dirs written.
     """
     results = dict(candidates)
@@ -331,19 +435,14 @@ def export_klusters_session(output_dir: str, corpus: Corpus,
         results["ground_truth"] = corpus.ground_truth
     adapter_names = list(results)
 
-    # Materialise the shared .fil/.dat/.yaml once into the FIRST adapter's
-    # session dir, then pass that dir to the rest of the exports as a
-    # hardlink source.  Preserves per-adapter session self-containedness
-    # (every dir still has its own file names) without n copies of the
-    # bytes.
-    anchor_base: Optional[str] = None
+    # Every adapter links .fil/.dat/.probe (and copies .yaml) from the one
+    # per-item shared preprocessing dir.  prepare_shared_session is
+    # idempotent — BenchmarkRun.go has normally already called it before
+    # the sorters ran; calling it again here just validates.
+    shared = prepare_shared_session(output_dir, corpus)
     out_dirs: list[str] = []
     for name in adapter_names:
-        anchor = anchor_base    # None for the first, populated afterwards
-        sess_dir = export_adapter_session(output_dir, corpus, name,
-                                            results[name],
-                                            shared_from=anchor, **kw)
-        out_dirs.append(sess_dir)
-        if anchor_base is None:
-            anchor_base = os.path.join(sess_dir, "sim_session")
+        out_dirs.append(export_adapter_session(
+            output_dir, corpus, name, results[name],
+            shared_from=shared, **kw))
     return out_dirs

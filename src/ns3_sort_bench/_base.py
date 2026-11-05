@@ -247,6 +247,18 @@ class BenchmarkRun:
             # consumed by the Klusters export at the end of the inner loop.
             candidates_for_corpus: Dict[str, SortedResult] = {}
 
+            # ns3 preprocessing first: one shared bandpassed .fil/.dat/.yaml
+            # per item, before any sorter runs, so every
+            # klusters_<sorter>/<item>/ export links the same physical file.
+            if self.export_klusters:
+                try:
+                    from .klusters_export import prepare_shared_session
+                    shared = prepare_shared_session(self.output_dir, corpus)
+                    self._log(f"  shared preprocessing: {shared}.fil")
+                except Exception as e:
+                    self._log(f"  shared preprocessing FAILED: "
+                              f"{type(e).__name__}: {e}")
+
             for adapter in self.adapters:
                 ok, reason = adapter.available()
                 if not ok:
