@@ -175,6 +175,16 @@ class PairwiseScorer(Scorer):
                                             index_space=ref_t)
 
         tab, u_ref, u_can = _contingency(ref_lab, can_lab)
+        # Total non-reserved candidate spike count, pre-near-match-projection.
+        # Useful as a sanity check that the detector / sorter actually
+        # produced events at all — a sort that writes 0 spikes (botm_ref
+        # when its SIC-B loop can't bootstrap, or a misconfigured sorter)
+        # has `n_cand_spikes = 0`, which stands out next to a working
+        # sort's thousand-plus count.  Unlike `n_matched_spikes` (which
+        # only counts GT-overlapping spikes), this is independent of GT
+        # density and reports what the sort itself did.
+        n_cand_spikes = int(sum(int(np.asarray(can.spike_times[u]).size)
+                                 for u in can.unit_ids))
         values = dict(
             ari=_ari(tab),
             purity=_purity(tab),
@@ -182,6 +192,7 @@ class PairwiseScorer(Scorer):
             n_ref_units=float(u_ref.size),
             n_cand_units=float(u_can.size),
             n_matched_spikes=float(int(tab.sum())),
+            n_cand_spikes=float(n_cand_spikes),
             n_ref_spikes=float(ref_lab.size),
         )
 

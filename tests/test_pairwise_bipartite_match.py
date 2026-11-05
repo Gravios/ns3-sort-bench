@@ -111,6 +111,34 @@ def test_registered_pairwise_uses_near_match_tolerance():
     assert scorer_registry["pairwise_delta12"].delta_frames == 12
 
 
+def test_pairwise_emits_total_candidate_spike_count():
+    """pairwise's `n_cand_spikes` reports the total non-reserved
+    candidate spike count — independent of how many of those spikes
+    actually overlap with GT.  Useful as a sanity check that
+    distinguishes "the sort detected nothing" (n_cand_spikes = 0)
+    from "the sort detected lots but none near GT" (n_cand_spikes
+    large, n_matched_spikes tiny).
+    """
+    from ns3_sort_bench._base import SortedResult
+    from ns3_sort_bench.scorers.pairwise import PairwiseScorer
+
+    gt  = _sr({3: [100, 500, 900]}, adapter="gt")
+    # 10 total candidate spikes across 3 clusters; only 3 near GT.
+    can = _sr({
+        2: [101, 501, 901],
+        5: [200, 700, 1500],
+        7: [10, 20, 30, 40],
+    }, adapter="sorter")
+    sr = PairwiseScorer(delta_frames=12)(gt, can)
+    assert sr.values["n_cand_spikes"] == 10.0
+    assert sr.values["n_matched_spikes"] == 3.0
+    # Degenerate: a sort that detected nothing.
+    empty = SortedResult(unit_ids=[], spike_times={}, sampling_rate=20000.0,
+                          adapter="empty", corpus_item="x")
+    sr0 = PairwiseScorer(delta_frames=12)(gt, empty)
+    assert sr0.values["n_cand_spikes"] == 0.0
+
+
 def test_pairwise_match_drops_reserved_before_match():
     """Candidates in Klusters-reserved clusters (0/1) must be dropped
     BEFORE the nearest-neighbour match runs — otherwise a reserved

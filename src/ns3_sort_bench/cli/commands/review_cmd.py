@@ -38,6 +38,7 @@ _METRIC_ALIASES = {
     "oracle_merge_subset_size_mean": "merge_n",
     "n_matched_spikes":           "n_match",
     "n_cand_units":               "n_cand",
+    "n_cand_spikes":              "n_spks",
     "n_ref_units":                "n_ref",
     "n_ref_cells":                "n_cells",
     "n_ref_spikes":               "n_sp",
@@ -53,6 +54,7 @@ _DEFAULT_COLS = (
     "cells_ge_80",
     "cells_ge_50",
     "n_cand_units",
+    "n_cand_spikes",                    # ← total non-reserved spikes the sort wrote
     "oracle_merge_accuracy_mean",
     "oracle_merge_subset_size_mean",
     "ari",
