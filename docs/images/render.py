@@ -128,11 +128,74 @@ def social() -> str:                      # 1280 × 640: GitHub link preview
     return page(body, w, h, 0)
 
 
+KICKER_SB = name_html
+
+
+# Documentation pages: (key, icon svg, title, tagline, narrow tagline).
+DOC_PAGES = [
+    ("cli", "cli", "ns3sb CLI",
+     "Command-line reference: plan, run, score, review",
+     "Command-line reference"),
+    ("paired-recordings", "paired-recordings", "Paired recordings",
+     "Scoring against simultaneous juxtacellular ground truth",
+     "Juxtacellular ground truth"),
+    ("contracts", "contracts", "Adapter contracts",
+     "What each sorter adapter needs and returns",
+     "What each adapter needs"),
+    ("install", "install", "Installation",
+     "The harness, and the sorters you want to compare",
+     "Harness and sorters"),
+]
+
+
+def doc_banner(icon: str, title: str, tag: str) -> str:   # 2560 × 640
+    w, h = 2560, 640
+    body = (
+        f'<svg style="position:absolute;left:0;top:0" width="{w}" height="{h}">'
+        f'{trace(w, 553, 1560, kx=2.0, ky=1.5)}</svg>'
+        f'<div class="tile" style="left:160px;top:88px;width:392px;height:392px">'
+        f'{svg(icon)}</div>'
+        f'<div style="position:absolute;left:660px;top:126px">'
+        f'<div class="kicker" style="font-size:46px">'
+        f'<div style="width:58px;height:58px;margin-right:20px">{svg("ns3-sort-bench")}</div>'
+        f'{KICKER_SB()}</div>'
+        f'<div class="title" style="font-size:150px;margin-top:20px;color:{W}">{title}</div>'
+        f'<div class="tag" style="font-size:52px;margin-top:34px">{tag}</div></div>')
+    return page(body, w, h, 52)
+
+
+def doc_banner_narrow(icon: str, title: str, tag: str) -> str:   # 1600 × 600
+    w, h = 1600, 600
+    body = (
+        f'<svg style="position:absolute;left:0;top:0" width="{w}" height="{h}">'
+        f'{trace(w, 518, 940, kx=1.8, ky=1.35, sw=13)}</svg>'
+        f'<div class="tile" style="left:104px;top:80px;width:320px;height:320px">'
+        f'{svg(icon)}</div>'
+        f'<div style="position:absolute;left:500px;top:116px">'
+        f'<div class="kicker" style="font-size:42px">'
+        f'<div style="width:56px;height:56px;margin-right:18px">{svg("ns3-sort-bench")}</div>'
+        f'{KICKER_SB()}</div>'
+        f'<div class="title" style="font-size:112px;margin-top:22px;color:{W}">{title}</div>'
+        f'<div class="tag" style="font-size:52px;margin-top:30px">{tag}</div></div>')
+    return page(body, w, h, 44)
+
+
+# hicolor sizes and .ico sizes, as in neurosuite-3 (doc/images/README.md there)
+ICON_SIZES = (16, 22, 32, 48, 64, 128, 256)
+ICO_SIZES = (16, 24, 32, 48, 64, 256)
+
+
 def main() -> None:
     from playwright.sync_api import sync_playwright
     jobs = [("banner.png", banner(), 2560, 800),
             ("banner-narrow.png", narrow(), 1600, 680),
             ("social-preview.png", social(), 1280, 640)]
+    for key, icon, title, tag, ntag in DOC_PAGES:
+        jobs.append((f"doc-{key}-banner.png", doc_banner(icon, title, tag), 2560, 640))
+        jobs.append((f"doc-{key}-banner-narrow.png",
+                     doc_banner_narrow(icon, title, ntag), 1600, 600))
+    icon_dir = HERE / "icons"
+    icon_dir.mkdir(exist_ok=True)
     with sync_playwright() as pw:
         b = pw.chromium.launch()
         for out, html, w, h in jobs:
@@ -141,13 +204,26 @@ def main() -> None:
             pg.evaluate("document.fonts.ready")
             pg.screenshot(path=str(HERE / out), omit_background=True)
             print("wrote", out)
-        pg = b.new_page(viewport={"width": 256, "height": 256})
-        pg.set_content(f'<html><body style="margin:0;background:transparent">'
-                       f'<div style="width:256px;height:256px">{svg("ns3-sort-bench")}'
-                       f'</div></body></html>')
-        pg.screenshot(path=str(HERE / "icon-256.png"), omit_background=True)
-        print("wrote icon-256.png")
+        # App icons: every hicolor size rendered straight from the SVG
+        # (not downscaled from 256), so small sizes get the renderer's own
+        # hinting, as neurosuite-3's were.
+        for size in sorted(set(ICON_SIZES) | set(ICO_SIZES)):
+            pg = b.new_page(viewport={"width": size, "height": size})
+            pg.set_content(f'<html><body style="margin:0;background:transparent">'
+                           f'<div style="width:{size}px;height:{size}px">'
+                           f'{svg("ns3-sort-bench")}</div></body></html>')
+            pg.screenshot(path=str(icon_dir / f"hi{size}-app-ns3-sort-bench.png"),
+                          omit_background=True)
         b.close()
+    # .ico from the per-size renderings (not a single downscale).
+    from PIL import Image
+    imgs = [Image.open(icon_dir / f"hi{s}-app-ns3-sort-bench.png").convert("RGBA")
+            for s in ICO_SIZES]
+    imgs[-1].save(icon_dir / "app-ns3-sort-bench.ico",
+                  sizes=[(s, s) for s in ICO_SIZES], append_images=imgs[:-1])
+    for s in set(ICO_SIZES) - set(ICON_SIZES):        # 24 px is .ico-only
+        (icon_dir / f"hi{s}-app-ns3-sort-bench.png").unlink()
+    print("wrote icons/")
     # Dithered 256-colour reduction (~150-250 KB instead of ~1-1.7 MB).
     # A plain PIL octree quantize bands the panel gradient and haloes the
     # tile shadow; pngquant's dithering doesn't.  Skipped if not installed.

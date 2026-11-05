@@ -1,4 +1,7 @@
-# Running on simultaneous whole-cell / paired ground-truth
+<h1><picture>
+  <source media="(max-width: 600px)" srcset="images/doc-paired-recordings-banner-narrow.png">
+  <img src="images/doc-paired-recordings-banner.png" width="100%" alt="Running on simultaneous whole-cell / paired ground-truth">
+</picture></h1>
 
 The SpikeForest corpus includes six **paired recording** study sets where
 every extracellular trace comes with a simultaneously-recorded intracellular

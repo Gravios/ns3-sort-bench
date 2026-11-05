@@ -10,6 +10,10 @@ trace.
 | ns3-sort-bench | three ranked bars (cyan < white < orange), each in a faint column marking the ceiling | `ns3-sort-bench.svg` |
 | Sorters (banner chip) | a plug — every sorter plugs in through an adapter | `sorters.svg` |
 | Ground truth (banner chip) | a target | `ground-truth.svg` |
+| ns3sb CLI (doc page) | a prompt above the summary table it prints | `cli.svg` |
+| Paired recordings (doc page) | a juxtacellular trace (orange, large positive spikes) over an extracellular one (white, small troughs), cyan links joining matched spikes | `paired-recordings.svg` |
+| Adapter contracts (doc page) | a spec sheet with a tick | `contracts.svg` |
+| Installation (doc page) | a download arrow into a tray | `install.svg` |
 | Klusters (banner chip) | copied from neurosuite-3 `src/klusters/src/app-klusters.svg` | `klusters.svg` |
 | neurosuite-3 (banner kicker) | copied from neurosuite-3 `doc/images/neurosuite-3.svg` | `neurosuite-3.svg` |
 
@@ -24,7 +28,19 @@ Rendered from them by `render.py` (Chromium via Playwright, Inter font):
   below 600 px;
 - `social-preview.png` (1280 × 640): GitHub's link preview, uploaded by hand
   under Settings → General → Social preview;
-- `icon-256.png`.
+- `doc-<page>-banner.png` (2560 × 640) and `doc-<page>-banner-narrow.png`
+  (1600 × 600) for `cli`, `paired-recordings`, `contracts` and `install`:
+  the top of each documentation page, the narrow one replacing it below
+  600 px.  The page's icon, an "ns3-sort-bench" kicker line, the title and a
+  tagline — the same layout as neurosuite-3's `doc/<program>/banner.png`;
+- `icons/hi<size>-app-ns3-sort-bench.png` (16, 22, 32, 48, 64, 128, 256 px)
+  and `icons/app-ns3-sort-bench.ico` (16, 24, 32, 48, 64, 256 px): the app
+  icon at the hicolor theme sizes and for Windows, each size rendered from
+  the SVG rather than downscaled.
 
-After changing an SVG, run `python3 docs/images/render.py` and look at the
-chips in `banner.png`: at 54 px only the motif's colours and outline survive.
+Banners are dithered to 256 colours with `pngquant` when it is installed
+(about 130-240 KB each).
+
+After changing an SVG, run `python3 docs/images/render.py` and look at
+`icons/hi16-app-ns3-sort-bench.png` and the chips in `banner.png`: below
+32 px only the motif's colours and outline survive.

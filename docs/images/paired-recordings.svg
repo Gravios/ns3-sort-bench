@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>paired recordings</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><path d="M146,150 V232" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="12" stroke-dasharray="1 24"/><path d="M256,150 V232" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="12" stroke-dasharray="1 24"/><path d="M366,150 V232" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="12" stroke-dasharray="1 24"/><path d="M60,150 H116 L132,162 L146,68 L162,175 Q172,150 184,150 H226 L242,162 L256,68 L272,175 Q282,150 294,150 H336 L352,162 L366,68 L382,175 Q392,150 404,150 H452" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#FF8F45" stroke-width="20"/><path d="M60,256 H116 L132,249 L146,302 L162,242 Q172,256 184,256 H226 L242,249 L256,302 L272,242 Q282,256 294,256 H336 L352,249 L366,302 L382,242 Q392,256 404,256 H452" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#EEF4F8" stroke-width="18"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

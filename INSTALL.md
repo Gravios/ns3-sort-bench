@@ -1,4 +1,7 @@
-# Installation
+<h1><picture>
+  <source media="(max-width: 600px)" srcset="docs/images/doc-install-banner-narrow.png">
+  <img src="docs/images/doc-install-banner.png" width="100%" alt="ns3-sort-bench — installation">
+</picture></h1>
 
 ## TL;DR
 

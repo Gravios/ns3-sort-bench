@@ -1,4 +1,7 @@
-# `ns3sb` — command-line reference
+<h1><picture>
+  <source media="(max-width: 600px)" srcset="images/doc-cli-banner-narrow.png">
+  <img src="images/doc-cli-banner.png" width="100%" alt="ns3sb — command-line reference">
+</picture></h1>
 
 Primary entry point for ns3-sort-bench.  Short, muscle-memory-friendly,
 verb-noun subcommands.  The old `ns3-sort-bench` command still works
