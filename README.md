@@ -1,4 +1,7 @@
-# ns3-sort-bench
+<h1><picture>
+  <source media="(max-width: 600px)" srcset="docs/images/banner-narrow.png">
+  <img src="docs/images/banner.png" width="100%" alt="ns3-sort-bench">
+</picture></h1>
 
 Cross-sorter benchmark harness for **neurosuite-3 / fiber-kit** sessions.
 Compares spike-sorting algorithms on a unified metric schema and shared

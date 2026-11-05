@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>ns3-sort-bench</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><rect x="96" y="88" width="84" height="244" rx="22" fill="#43C8E2" opacity="0.14"/><rect x="96" y="214" width="84" height="118" rx="22" fill="#43C8E2"/><rect x="214" y="88" width="84" height="244" rx="22" fill="#EEF4F8" opacity="0.14"/><rect x="214" y="154" width="84" height="178" rx="22" fill="#EEF4F8"/><rect x="332" y="88" width="84" height="244" rx="22" fill="#FF8F45" opacity="0.14"/><rect x="332" y="88" width="84" height="244" rx="22" fill="#FF8F45"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>
