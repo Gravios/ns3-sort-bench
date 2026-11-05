@@ -5,6 +5,7 @@ Precedence (left wins):
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
 from .._util import eprint, import_registries, split_csv
@@ -48,18 +49,29 @@ def cmd_run(args) -> int:
 
     output_dir = args.out or plan.output_dir
 
+    # ─ resolve the two per-run toggles ─
+    # CLI flag wins over the plan; omit the flag to inherit the plan's value.
+    keep_fk_artifacts = plan.keep_fk_artifacts
+    if args.keep_fk_artifacts is not None:
+        keep_fk_artifacts = args.keep_fk_artifacts
+    export_klusters = plan.export_klusters
+    if args.export_klusters is not None:
+        export_klusters = args.export_klusters
+
     if args.dry_run:
-        print(f"output_dir : {output_dir}")
-        print(f"corpora    : {corpus_keys}")
-        print(f"adapters   : {adapter_names}")
-        print(f"scorers    : {scorer_names}")
-        if plan.ns3_yaml:    print(f"ns3_yaml   : {plan.ns3_yaml}")
-        if plan.delta_frames: print(f"delta_frames: {plan.delta_frames}")
+        print(f"output_dir       : {output_dir}")
+        print(f"corpora          : {corpus_keys}")
+        print(f"adapters         : {adapter_names}")
+        print(f"scorers          : {scorer_names}")
+        print(f"keep_fk_artifacts: {keep_fk_artifacts}")
+        print(f"export_klusters  : {export_klusters}")
+        if plan.ns3_yaml:    print(f"ns3_yaml         : {plan.ns3_yaml}")
+        if plan.delta_frames: print(f"delta_frames     : {plan.delta_frames}")
         return 0
 
     # ─ build + run ─
     adapter_kwargs = {}
-    if plan.keep_fk_artifacts:
+    if keep_fk_artifacts:
         # Every fiber-kit mode honours `fk_artifacts_dir`.  The adapter
         # places its session dir under `<fk_artifacts_dir>/<corpus_slug>/`
         # and never deletes it, so every .res / .spk / .clu / stage log
@@ -68,7 +80,7 @@ def cmd_run(args) -> int:
 
     bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
                           adapter_kwargs=adapter_kwargs,
-                          export_klusters=plan.export_klusters)
+                          export_klusters=export_klusters)
 
     for key in corpus_keys:
         try:
@@ -86,9 +98,9 @@ def cmd_run(args) -> int:
     df = bench.go()
     if not args.quiet:
         print(f"\nwrote {output_dir}/scores.csv  ({len(df)} rows)")
-        if plan.keep_fk_artifacts:
+        if keep_fk_artifacts:
             print(f"fiber-kit artifacts kept under {output_dir}/fiber_kit/")
-        if plan.export_klusters:
+        if export_klusters:
             print(f"Klusters sessions written under {output_dir}/klusters_<sorter>/")
     return 0
 
@@ -105,6 +117,21 @@ def register(subparsers) -> None:
                          "(default: pairwise,per_cell,propper_overlap)")
     ap.add_argument("--out", default="",
                     help="output directory (default: plan.output_dir)")
+    # Per-run overrides for the two plan toggles.  Each defaults to None so
+    # the resolver can tell "user gave --no-<flag>" from "user gave nothing";
+    # with None the plan's stored value wins, with True/False the CLI does.
+    ap.add_argument(
+        "--export-klusters", dest="export_klusters",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="export per-sorter Klusters sessions under "
+             "<out>/klusters_<sorter>/<item>/ (overrides the plan setting)",
+    )
+    ap.add_argument(
+        "--keep-fk-artifacts", dest="keep_fk_artifacts",
+        action=argparse.BooleanOptionalAction, default=None,
+        help="keep fiber-kit's per-sort tmp dir under <out>/fiber_kit/ "
+             "(overrides the plan setting)",
+    )
     ap.add_argument("--dry-run", action="store_true",
                     help="print the resolved plan and exit without running")
     ap.add_argument("--quiet", action="store_true",
