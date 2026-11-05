@@ -46,7 +46,8 @@ CONTRACT = Contract(
         dtype=("int16", "float32"), probe_geometry_required=True,
         signal_space="raw",
     ),
-    output=OutputSchema(unit_id_offset=0, templates_emitted=False,
+    # unit_id_offset=2 is inherited from the kilosort4 adapter's IDs.
+    output=OutputSchema(unit_id_offset=2, templates_emitted=False,
                          per_group_or_whole="whole_session"),
     capabilities=Capabilities(
         drift_aware=False,                   # inherited from upstream KS4

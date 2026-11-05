@@ -15,7 +15,7 @@ from typing import Any, Mapping, Optional
 import numpy as np
 
 from .._base import (
-    SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
+    SortedResult, si_sorting_to_spike_times, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
 from ..configs import load_adapter_config
 from ..contracts import (
@@ -95,8 +95,9 @@ class _SISorterBase(SorterAdapter):
                     folder=td, remove_existing_folder=True, verbose=False,
                     **run_kw,
                 )
-            spike_times = {int(u): np.asarray(sorting.get_unit_spike_train(u), np.int64)
-                           for u in sorting.get_unit_ids()}
+            # Shift past Klusters' reserved IDs 0/1 (see
+            # _base.si_sorting_to_spike_times) — raw SI IDs start at 0/1.
+            spike_times, id_map = si_sorting_to_spike_times(sorting)
 
         return SortedResult(
             unit_ids=sorted(spike_times), spike_times=spike_times,
@@ -106,7 +107,8 @@ class _SISorterBase(SorterAdapter):
             adapter_version=self._version,
             channels=list(recording.get_channel_ids()),
             wall_time_s=rt["wall_time_s"], peak_rss_mb=rt["peak_rss_mb"],
-            extras=dict(si_name=self._si_name, run_kwargs=run_kw),
+            extras=dict(si_name=self._si_name, run_kwargs=run_kw,
+                        si_unit_id_map=id_map),
         )
 
 
@@ -127,7 +129,7 @@ class MountainSort5Adapter(_SISorterBase):
             dtype=("int16", "float32"), probe_geometry_required=True,
             signal_space="filtered",
         ),
-        output=OutputSchema(unit_id_offset=0, templates_emitted=False,
+        output=OutputSchema(unit_id_offset=2, templates_emitted=False,
                              per_group_or_whole="per_group"),
         capabilities=Capabilities(
             drift_aware=False, overlap_resolution="none",
@@ -161,7 +163,7 @@ class Tridesclous2Adapter(_SISorterBase):
             dtype=("int16", "float32"), probe_geometry_required=True,
             signal_space="raw",
         ),
-        output=OutputSchema(unit_id_offset=0, per_group_or_whole="per_group"),
+        output=OutputSchema(unit_id_offset=2, per_group_or_whole="per_group"),
         capabilities=Capabilities(
             drift_aware=False, overlap_resolution="none", requires_gpu=False,
         ),
@@ -189,7 +191,7 @@ class SpykingCircus2Adapter(_SISorterBase):
             dtype=("int16", "float32"), probe_geometry_required=True,
             signal_space="filtered",
         ),
-        output=OutputSchema(unit_id_offset=0, templates_emitted=True,
+        output=OutputSchema(unit_id_offset=2, templates_emitted=True,
                              per_group_or_whole="per_group"),
         capabilities=Capabilities(
             drift_aware=False, overlap_resolution="iterative_subtract",
@@ -222,7 +224,7 @@ class Kilosort4Adapter(_SISorterBase):
             dtype=("int16", "float32"), probe_geometry_required=True,
             signal_space="raw",
         ),
-        output=OutputSchema(unit_id_offset=0, templates_emitted=True,
+        output=OutputSchema(unit_id_offset=2, templates_emitted=True,
                              per_group_or_whole="whole_session"),
         capabilities=Capabilities(
             drift_aware=True, overlap_resolution="iterative_subtract",

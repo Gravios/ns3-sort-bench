@@ -86,6 +86,35 @@ class SortedResult:
         )
 
 
+# ─── unit-ID offset for SpikeInterface sortings ─────────────────────────────
+# Klusters convention reserves cluster IDs 0 (artefact) and 1 (noise/MUA);
+# SortedResult.dropped_reserved() — and therefore every scorer — discards
+# them.  SpikeInterface sorters number units from 0 (kilosort4, dartsort,
+# tridesclous2, spykingcircus2) or 1 (mountainsort5), so passing their IDs
+# through raw silently threw away a sorter's first one or two real units.
+# Every SI-wrapped adapter shifts IDs by this offset at the boundary, the
+# same thing botm_ref already does.
+KLUSTERS_UNIT_ID_OFFSET = 2
+
+
+def si_sorting_to_spike_times(sorting) -> "tuple[dict, dict]":
+    """Read a SpikeInterface BaseSorting into ``(spike_times, id_map)``.
+
+    `spike_times` is keyed by ``rank + KLUSTERS_UNIT_ID_OFFSET`` — units are
+    renumbered contiguously from 2 in the sorter's own unit order, so no
+    sorter unit can land on a reserved ID whatever its native IDs are
+    (ints from 0 or 1, or string IDs).  `id_map` maps new ID → the sorter's
+    original unit ID, for tracing a unit back to the sorter's own output.
+    """
+    spike_times: dict = {}
+    id_map: dict = {}
+    for rank, u in enumerate(sorting.get_unit_ids()):
+        new = rank + KLUSTERS_UNIT_ID_OFFSET
+        spike_times[new] = np.asarray(sorting.get_unit_spike_train(u), np.int64)
+        id_map[new] = u.item() if hasattr(u, "item") else u
+    return spike_times, id_map
+
+
 # ─── SorterAdapter ───────────────────────────────────────────────────────────
 class SorterAdapter(ABC):
     """One method per sorter.  Each subclass:
