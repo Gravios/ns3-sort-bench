@@ -154,6 +154,13 @@ def test_mountainsort5_config_uses_valid_si_keys():
     assert not bad, f"invalid MountainSort5 keys: {sorted(bad)}"
 
 
+def test_mountainsort5_scheme_is_a_string():
+    """SI's Mountainsort5Sorter checks scheme in ('1', '2', '3') as
+    strings; an int from an unquoted YAML value raises at run time."""
+    rk = load_adapter_config("mountainsort5")["run_kwargs"]
+    assert isinstance(rk["scheme"], str) and rk["scheme"] in ("1", "2", "3")
+
+
 def test_spykingcircus2_config_restates_full_nested_blocks():
     """SC2 params are nested and SI merges with a SHALLOW dict.update,
     so an overridden sub-dict must carry every sibling key or the

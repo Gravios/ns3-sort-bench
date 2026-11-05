@@ -26,7 +26,10 @@ run_kwargs:
   # that under-performs on realistic data; scheme 3 is for recordings
   # long enough to need chunk-wise retraining (hours).  2 is the right
   # middle for a 10-30 min CA1 session.
-  scheme: 2
+  # QUOTED: the SI wrapper compares p['scheme'] against the strings
+  # '1' / '2' / '3'; a bare YAML `2` loads as int and raises
+  # "Invalid scheme: 2".
+  scheme: "2"
 
   # Extracellular spikes are negative-going.  Upstream default is 0
   # (either polarity), which doubles the hit count with mirror-image
