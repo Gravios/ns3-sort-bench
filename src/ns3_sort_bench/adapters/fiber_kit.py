@@ -398,7 +398,7 @@ _FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
 
 # Scoreable intermediate .clu tags produced along the fiber_kit mode's
 # embedded 13-step plan (configs/fiber_kit.yaml → `pipeline:`; fiber-kit
-# 0.71.5's fiber-kit-exp.yaml, main line):
+# 0.71.7's fiber-kit-exp.yaml, main line):
 #     fiber_session   — fiber-session's initial over-clustering
 #     fs_clean        — fiber-consensus (quarantine-only) pass on session
 #     fs_psc          — fiber-psame-merge within each chunk
@@ -524,7 +524,7 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
     return Contract(
         adapter_name=mode,
         upstream_url="https://github.com/Gravios/fiber-kit",
-        upstream_version_pin=">= 0.71.5",
+        upstream_version_pin=">= 0.71.7",
         yaml_fields_required=(
             "acquisitionSystem.samplingRate",
             "acquisitionSystem.nChannels",
@@ -560,7 +560,7 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
         known_limitations=(
             "Session yaml must be ADJACENT to the .fil / .dat (same basename).",
             "Deconv ON requires fiber-kit >= 0.57.6 for the FK_SESSION_DECONV env flag.",
-            "The bundled configs/fiber_kit.yaml is fiber-kit 0.71.5's exp profile: the "
+            "The bundled configs/fiber_kit.yaml is fiber-kit 0.71.7's exp profile: the "
             "fiber_kit mode's plan ends in exp_psame and needs that version's stages "
             "(fiber-psame-merge, fiber-xcorr-merge) and knobs.",
             "Variant/tag names must match the stage output you want "
@@ -762,7 +762,7 @@ class _FiberKitBase(SorterAdapter):
     # fallback, unlike fiber-intrachunk which does).
     _MODE_STAGES = {
         # `fiber_kit` mode runs the 13-step plan embedded as `pipeline:` in
-        # configs/fiber_kit.yaml (fiber-kit 0.71.5's exp profile, main line) —
+        # configs/fiber_kit.yaml (fiber-kit 0.71.7's exp profile, main line) —
         # fiber-flag-artifacts → session → realign → consensus(clean) →
         # realign → cpos → psame-merge(per chunk) → anchor-link → realign →
         # xcorr-merge → psame-merge → realign → rdr.  We don't orchestrate those stages

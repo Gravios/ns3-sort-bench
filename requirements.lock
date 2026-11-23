@@ -100,7 +100,7 @@ faiss-cpu==1.15.1
     # via kilosort
 fasteners==0.20
     # via zarr
-fiber-kit @ git+https://github.com/Gravios/fiber-kit.git@48e6123b0d2a75ffa19fc39e1fe4a620aba08819
+fiber-kit @ git+https://github.com/Gravios/fiber-kit.git@7c6c35deaf81cb7bf2f0722ccd00d186787e3734
     # via ns3-sort-bench (pyproject.toml)
 figurl==0.3.1
     # via sortingview
