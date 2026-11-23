@@ -27,11 +27,13 @@ pip install -e .
 ## What `[all]` includes
 
 Resolved against **Python 3.13.18, linux-x86_64, 2026-11-02** (see
-`requirements.lock` for the full 148-package manifest).  Core
-`pyproject.toml` dependencies are strict `==` pins because benchmark
-reproducibility is the whole point — a point release of SpikeInterface
-changing spike-matching semantics mid-benchmark would silently
-invalidate stored baselines.
+`requirements.lock` for the full 148-package manifest).  The table
+shows the versions in that lockfile.  `pyproject.toml` itself declares
+ranges for the core (numpy, scipy and pyyaml with fiber-kit's floors), so
+`pip install ns3-sort-bench` into an environment that already has
+fiber-kit keeps the numpy / scipy / pandas installed there; only the
+sorters and SpikeInterface's minor series are held fixed.  Use the
+lockfile in a fresh environment when the numbers must be reproducible.
 
 | Group | Packages |
 |---|---|
@@ -112,9 +114,9 @@ uv pip compile --python-version 3.13 --extra all pyproject.toml \
     --output-file requirements.lock
 ```
 
-CI should fail any `pyproject.toml` bump PR whose `requirements.lock`
+CI should fail any `pyproject.toml` change whose `requirements.lock`
 wasn't regenerated in the same commit — otherwise the lockfile silently
-drifts from the pins.
+drifts from what the ranges resolve to.
 
 ## Per-sorter install notes
 

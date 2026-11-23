@@ -33,22 +33,31 @@ pip install ns3-sort-bench[ibl]                    # + IBL ONE API corpus
 pip install ns3-sort-bench[all-cpu]                # everything CPU-only
 ```
 
-## Pinned versions (2026-11-02)
+## Dependencies
 
-Core deps are pinned to the exact versions the harness was validated
-against.  Bumping a pin requires re-running the smoke suite — see
-`pyproject.toml` for the rationale.
+Core dependencies are ranges, so the harness installs into the
+environment that already holds fiber-kit and neurosuite-3's Python
+helpers without replacing their numpy / scipy / pyyaml (the three carry
+fiber-kit's floors).  SpikeInterface is held to one minor series, since
+a point release there can change spike matching.
 
-| Package | Version |
-|---|---|
-| numpy | 2.5.4 |
-| pandas | 3.1.0 |
-| pyyaml | 6.0.3 |
-| scipy | 1.18.1 |
-| spikeinterface | 0.105.4 |
-| probeinterface | 0.4.2 |
-| neo | 0.14.6 |
-| tqdm | 4.70.1 |
+| Package | Range | Version in `requirements.lock` |
+|---|---|---|
+| numpy | `>=1.21` (SpikeInterface needs 2.0) | 2.5.4 |
+| scipy | `>=1.7` | 1.18.1 |
+| pyyaml | `>=5.3` | 6.0.3 |
+| pandas | `>=2.2` | 3.1.0 |
+| spikeinterface | `>=0.105.4,<0.106` | 0.105.4 |
+| probeinterface | `>=0.4.0` | 0.4.2 |
+| neo | `>=0.14.5` | 0.14.6 |
+| tqdm | any | 4.70.1 |
+
+For numbers that must be reproducible, use a fresh environment with the
+exact set: `pip install -r requirements.lock && pip install -e .`.
+
+SpikeInterface 0.105 itself requires `zarr<3` and `numcodecs<0.16` on
+Python < 3.14, so pip moves those two down if a newer zarr is installed;
+that comes from SpikeInterface, not from this package.
 
 Optional sorter extras pin their upstream to its latest known-good
 release (Kilosort 4.1.7, MountainSort 5.0.5.9, Tridesclous 1.6.9,
