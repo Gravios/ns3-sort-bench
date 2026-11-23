@@ -611,7 +611,7 @@ def test_full_chain_final_tag_matches_link_output_stage():
     from ns3_sort_bench.adapters.fiber_kit import (
         _FiberKitBase, _stage_method_flags,
     )
-    # fiber_kit emits exp_final from fiber-consensus(review) (the embedded
+    # fiber_kit emits exp_psame from fiber-psame-merge (the embedded
     # plan's last `out:`); its final tag has nothing to do with
     # fiber-link's output stage.  Keep this pin focused on the legacy
     # per-stage chain, which still drives fiber_kit_no_deconv.
@@ -632,7 +632,7 @@ def test_full_chain_final_tag_matches_link_output_stage():
 
 def test_fiber_kit_mode_dispatches_through_fiber_pipeline():
     """`fiber_kit` mode must dispatch via the `fiber-pipeline` bash driver
-    (which reads the 9-step `pipeline:` block embedded in
+    (which reads the `pipeline:` block embedded in
     configs/fiber_kit.yaml), NOT iterate the legacy per-stage chain.
 
     If this ever regresses to [fiber-session, fiber-realign, ...], the
@@ -648,9 +648,21 @@ def test_fiber_kit_mode_dispatches_through_fiber_pipeline():
         "fiber-kit's bash driver)."
     )
     final = _FiberKitBase._MODE_FINAL_TAG["fiber_kit"]
-    assert final == "exp_final", (
+    assert final == "exp_psame", (
         f"_MODE_FINAL_TAG['fiber_kit'] = {final!r}; the embedded plan's "
-        "last `out:` tag (from fiber-consensus(review)) is 'exp_final'."
+        "last `out:` tag (from fiber-psame-merge) is 'exp_psame'."
+    )
+    # ... and it IS the last `out:` of the bundled plan, whatever that plan
+    # becomes: a config update that changes the plan's end must move the
+    # constant with it (the readback would otherwise miss the file).
+    import yaml
+    from ns3_sort_bench import configs as _cfgs
+    plan = yaml.safe_load(
+        (Path(_cfgs.__file__).parent / "fiber_kit.yaml").read_text())["pipeline"]
+    outs = [step["out"] for step in plan if step.get("out")]
+    assert outs and outs[-1] == final, (
+        f"bundled plan ends in {outs[-1] if outs else None!r}, "
+        f"_MODE_FINAL_TAG['fiber_kit'] is {final!r}"
     )
 
 
@@ -761,10 +773,10 @@ def test_fiber_kit_scoreable_stages_cover_the_plans_intermediates():
     SortedResults for scoring.  It must:
 
       * cover every `out:` tag the embedded `pipeline:` writes EXCEPT
-        exp_final (that's the primary readback, re-emitting it would
+        the plan's last one (that's the primary readback, re-emitting it would
         duplicate the fiber_kit row);
       * preserve the plan's precision-increasing step order
-        (fiber_session → fs_clean → exp_xcm) so the scored rows read
+        (fiber_session → fs_clean → fs_psc → exp_linked → exp_xcm) so the scored rows read
         naturally.
     """
     from ns3_sort_bench.adapters.fiber_kit import _FIBER_KIT_SCOREABLE_STAGES
@@ -783,9 +795,9 @@ def test_fiber_kit_scoreable_stages_cover_the_plans_intermediates():
             f"{stage!r} isn't an `out:` in the embedded plan; "
             "the readback would hit a missing .clu file."
         )
-    # exp_final (the primary) is deliberately NOT a separate stage.
-    assert "exp_final" not in _FIBER_KIT_SCOREABLE_STAGES, (
-        "exp_final is the fiber_kit primary readback; emitting it as a "
+    # The plan's last output (the primary) is deliberately NOT a separate stage.
+    assert plan_outs[-1] not in _FIBER_KIT_SCOREABLE_STAGES, (
+        f"{plan_outs[-1]} is the fiber_kit primary readback; emitting it as a "
         "stage result duplicates the fiber_kit row in scored output."
     )
     # Order mirrors the plan.
@@ -803,7 +815,7 @@ def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
     configs/fiber_kit.yaml — fiber-pipeline reads both.  A reversion
     that narrowed the baseline back to `{FK_SESSION_REALIGN: off}` would
     silently fall back to the default canonical plan (fiber-session →
-    ... → fiber-link) and skip the user's 9-step pipeline entirely.
+    ... → fiber-link) and skip the embedded pipeline entirely.
     """
     import os, yaml
     orig = os.environ.pop("FK_CONFIG", None)
@@ -838,10 +850,14 @@ def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
     assert "fiber-flag-artifacts" in stages
     assert "fiber-consensus"     in stages
     assert "fiber-anchor-link"   in stages
-    # Final-output step (fiber-consensus review) is still present, and
-    # its out tag is `exp_final` — which _MODE_FINAL_TAG also pins.
+    assert "fiber-psame-merge"   in stages
+    # Final-output step (fiber-psame-merge) is still present, and its out
+    # tag is `exp_psame` — which _MODE_FINAL_TAG also pins.
     out_tags = [step.get("out") for step in parsed["pipeline"]]
-    assert "exp_final" in out_tags
+    assert "exp_psame" in out_tags
+    # The ns3sb edit: the plan's branch steps are off (side results the
+    # harness does not read; fiber-polish's island pass dominates runtime).
+    assert "fiber-polish" not in stages and "fiber-residual-merge" not in stages
     # Flat FK_* tuning is also present — spot-check one from the file.
     assert "FK_SESSION_CHUNK_MIN" in parsed
     # fiber-pipeline mode takes FK_SESSION_REALIGN from the full yaml

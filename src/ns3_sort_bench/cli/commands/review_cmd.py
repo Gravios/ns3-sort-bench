@@ -231,7 +231,8 @@ def cmd_summary(args) -> int:
         aggfunc="first",
         sort=False,       # keep scores.csv row order so pipeline stages
                           # render in plan order (fiber_session →
-                          # fs_clean → exp_xcm), not alphabetical.
+                          # fs_clean → fs_psc → exp_linked → exp_xcm),
+                          # not alphabetical.
     )
     # Pivot with sort=False keeps candidate_adapter order, but the
     # corpus_item level may still interleave poorly if a corpus has
@@ -341,7 +342,7 @@ def _print_org(piv, *, decimals: int) -> None:
         # stage rows get one; if neither the primary nor its stages got
         # filtered out, we include a trailing `<primary>@exp_final`-equivalent
         # row — the primary row itself — so the reader sees the whole chain
-        # (fiber_session → fs_clean → exp_xcm → <primary>) in one block.
+        # (fiber_session → fs_clean → ... → exp_xcm → <primary>) in one block.
         for primary in primaries:
             stage_names = stages_by_primary.get(primary)
             if not stage_names:
@@ -367,7 +368,7 @@ def _print_org(piv, *, decimals: int) -> None:
                     cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
                 stage_rows.append(cells)
             # End-of-chain row: the primary itself, labelled with its
-            # mode-final tag (today: fiber_kit → exp_final).  The label
+            # mode-final tag (today: fiber_kit → exp_psame).  The label
             # "final" is clear enough given the section heading.
             row = sub.loc[primary]
             cells = ["final"]

@@ -354,8 +354,9 @@ class BenchmarkRun:
                 # Multi-stage results: an adapter may attach additional
                 # SortedResults for scoreable intermediate sort stages via
                 # `extras["stage_results"]` (dict of {stage_tag → SortedResult})
-                # — today fiber_kit does this for the 9-step pipeline's
-                # fiber_session / fs_clean / exp_xcm intermediates.  Each
+                # — today fiber_kit does this for the embedded pipeline's
+                # fiber_session / fs_clean / fs_psc / exp_linked / exp_xcm
+                # intermediates.  Each
                 # one scores like a distinct adapter with name
                 # "<adapter>@<stage_tag>", feeds into the same rows and
                 # klusters export, but shares the parent's corpus_item.

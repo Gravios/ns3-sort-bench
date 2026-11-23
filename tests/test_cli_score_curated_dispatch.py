@@ -84,7 +84,7 @@ def test_find_raw_clu_prefers_untagged_canonical(tmp_path):
 
 def test_find_raw_clu_falls_back_to_tagged_when_no_untagged(tmp_path):
     """When an older run or a third-party export wrote the raw .clu
-    with the mode's end-of-chain tag (e.g. `.clu.standard.1.exp_final`)
+    with the mode's end-of-chain tag (e.g. `.clu.standard.1.exp_psame`)
     and NO un-tagged canonical sibling, `_find_raw_clu` must still pick
     it up via the documented-tag path or the glob fallback.
     """
@@ -92,7 +92,7 @@ def test_find_raw_clu_falls_back_to_tagged_when_no_untagged(tmp_path):
 
     sess = tmp_path / "klusters_fiber_kit" / "item1"
     sess.mkdir(parents=True)
-    tagged = sess / "sim_session.clu.standard.1.exp_final"
+    tagged = sess / "sim_session.clu.standard.1.exp_psame"
     tagged.write_bytes(b"\x00\x00\x00\x00")
     curated = sess / "sim_session.clu.standard.1.curated"
     curated.write_bytes(b"\x00\x00\x00\x00")

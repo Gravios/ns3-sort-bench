@@ -397,15 +397,19 @@ def _fk_pipeline_cfg_baseline() -> dict:
 _FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
 
 # Scoreable intermediate .clu tags produced along the fiber_kit mode's
-# embedded 9-step plan (configs/fiber_kit.yaml → `pipeline:`):
+# embedded 13-step plan (configs/fiber_kit.yaml → `pipeline:`; fiber-kit
+# 0.71.5's fiber-kit-exp.yaml, main line):
 #     fiber_session   — fiber-session's initial over-clustering
 #     fs_clean        — fiber-consensus (quarantine-only) pass on session
-#     exp_xcm         — fiber-anchor-link output
-#     (exp_final      — fiber-consensus review; this is the PRIMARY
+#     fs_psc          — fiber-psame-merge within each chunk
+#     exp_linked      — fiber-anchor-link output (cross-chunk link)
+#     exp_xcm         — fiber-xcorr-merge output
+#     (exp_psame      — fiber-psame-merge on exp_xcm; this is the PRIMARY
 #                       readback, not re-emitted as a stage result)
-# Order mirrors the plan's step order, which is also roughly
-# precision-increasing — useful for a reader skimming the scored rows.
-_FIBER_KIT_SCOREABLE_STAGES = ("fiber_session", "fs_clean", "exp_xcm")
+# Order mirrors the plan's step order — useful for a reader skimming the
+# scored rows.
+_FIBER_KIT_SCOREABLE_STAGES = ("fiber_session", "fs_clean", "fs_psc",
+                               "exp_linked", "exp_xcm")
 
 
 def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
@@ -520,7 +524,7 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
     return Contract(
         adapter_name=mode,
         upstream_url="https://github.com/Gravios/fiber-kit",
-        upstream_version_pin=">= 0.57.6",
+        upstream_version_pin=">= 0.71.5",
         yaml_fields_required=(
             "acquisitionSystem.samplingRate",
             "acquisitionSystem.nChannels",
@@ -556,8 +560,14 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
         known_limitations=(
             "Session yaml must be ADJACENT to the .fil / .dat (same basename).",
             "Deconv ON requires fiber-kit >= 0.57.6 for the FK_SESSION_DECONV env flag.",
+            "The bundled configs/fiber_kit.yaml is fiber-kit 0.71.5's exp profile: the "
+            "fiber_kit mode's plan ends in exp_psame and needs that version's stages "
+            "(fiber-psame-merge, fiber-xcorr-merge) and knobs.",
             "Variant/tag names must match the stage output you want "
-            "(default: stderiv_C5_D34 / exp_final).",
+            "(a materialised recording reads back standard / exp_psame; a "
+            "session that already has its spike files defaults to "
+            "stderiv_C5_D34 / exp_final — pass variant= and tag= when the "
+            "plan that ran on it ends elsewhere).",
             "Requires neurosuite-3's ndm_detectspikes, ndm_extractspikes and "
             "ndm_pca on PATH.  For a from-scratch SpikeInterface recording "
             "(SpikeForest paired items, Propper simulator, ...) the adapter "
@@ -751,10 +761,11 @@ class _FiberKitBase(SorterAdapter):
     # fiber-cpos produces (fiber-link has NO on-the-fly localizer
     # fallback, unlike fiber-intrachunk which does).
     _MODE_STAGES = {
-        # `fiber_kit` mode runs the user's preferred 9-step plan embedded as
-        # `pipeline:` in configs/fiber_kit.yaml — fiber-flag-artifacts →
-        # session → realign → consensus(clean) → cpos → anchor-link → realign
-        # → consensus(review) → rdr.  We don't orchestrate those stages
+        # `fiber_kit` mode runs the 13-step plan embedded as `pipeline:` in
+        # configs/fiber_kit.yaml (fiber-kit 0.71.5's exp profile, main line) —
+        # fiber-flag-artifacts → session → realign → consensus(clean) →
+        # realign → cpos → psame-merge(per chunk) → anchor-link → realign →
+        # xcorr-merge → psame-merge → realign → rdr.  We don't orchestrate those stages
         # ourselves; the `fiber-pipeline` bash driver (installed with
         # fiber-kit) reads the embedded plan from $FK_CONFIG and dispatches
         # each step with the right flags.  The lone "fiber-pipeline"
@@ -773,15 +784,16 @@ class _FiberKitBase(SorterAdapter):
     # each mode's chain.
     #   fiber-session mode: fiber-session writes tag `fiber_session`.
     #   fiber_kit (pipeline): the last step in the embedded plan whose
-    #                       `out:` is set is fiber-consensus(review),
-    #                       which writes `exp_final` — the full-chain
-    #                       output the harness scores by default.
+    #                       `out:` is set is fiber-psame-merge, which
+    #                       writes `exp_psame` — the full-chain output
+    #                       the harness scores by default.  (Up to the
+    #                       0.67-era config it was `exp_final`.)
     #   fiber_kit_no_deconv: legacy per-stage chain; fiber-link's default
     #                       --out-stage is "<clu-stage>_linked"; with
     #                       cpos-stage=refine (fiber-cpos's output), that
     #                       resolves to "refine_linked".
     _MODE_FINAL_TAG = {
-        "fiber_kit":            "exp_final",
+        "fiber_kit":            "exp_psame",
         "fiber_kit_no_deconv":  "refine_linked",
         "fiber_kit_session":    "fiber_session",
     }
@@ -972,7 +984,7 @@ class _FiberKitBase(SorterAdapter):
             # No channel-count auto overrides: the tetrode set tried in
             # 188dbab left d11221.001 unchanged (same 13 clusters, IoU
             # 0.0441).  Three of its five keys tune fiber-link /
-            # fiber-backbone-link, which the 9-step plan does not run.
+            # fiber-backbone-link, which the embedded plan does not run.
             # Point FK_CONFIG at the merged file so every stage sees it.
             fk_config = self._write_fk_config(
                 tmp_dir,
@@ -1057,14 +1069,15 @@ class _FiberKitBase(SorterAdapter):
                        for u in sort_ex.get_unit_ids()}
 
         # Multi-stage readback.  For fiber_kit mode (fiber-pipeline-dispatched)
-        # the embedded 9-step plan writes three scoreable intermediate .clu
+        # the embedded plan writes five scoreable intermediate .clu
         # outputs along the way — fiber_session (initial over-cluster),
-        # fs_clean (after fiber-consensus quarantine), exp_xcm (after
-        # fiber-anchor-link).  The user explicitly asked to score each of
+        # fs_clean (after fiber-consensus quarantine), fs_psc (per-chunk
+        # P(same) merge), exp_linked (fiber-anchor-link), exp_xcm
+        # (fiber-xcorr-merge).  The user explicitly asked to score each of
         # them against the ground truth; we read them back here and attach
         # the per-stage SortedResult via extras["stage_results"] so
         # BenchmarkRun.go can score them like any other adapter output.
-        # The exp_final stage is NOT re-emitted: that's already the
+        # The exp_psame stage is NOT re-emitted: that's already the
         # primary readback above, so re-scoring would just duplicate the
         # fiber_kit row.
         stage_results: Dict[str, "SortedResult"] = {}

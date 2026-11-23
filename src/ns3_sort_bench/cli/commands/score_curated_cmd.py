@@ -57,16 +57,20 @@ _RAW_TAG_FOR_SORTER = {
     # fiber-kit variants write the .clu whose tag is their mode's
     # end-of-chain tag — kept in sync with adapters/fiber_kit.py's
     # _MODE_FINAL_TAG.  Post-patch-0016, fiber_kit dispatches through
-    # the fiber-pipeline driver and writes exp_final; fiber_kit_no_deconv
+    # the fiber-pipeline driver and writes exp_psame (exp_final up to the
+    # 0.67-era bundled config; still listed below so runs written before
+    # the config update can be scored); fiber_kit_no_deconv
     # still runs the legacy per-stage chain and writes refine_linked;
     # fiber_kit_session stops at fiber_session.
-    "fiber_kit":            "exp_final",
+    "fiber_kit":            "exp_psame",
     "fiber_kit_no_deconv":  "refine_linked",
     "fiber_kit_session":    "fiber_session",
     # Per-stage dirs that patch 0018 writes (klusters_fiber_kit_<stage>/):
     # each carries the single stage's .clu, named by the stage tag itself.
     "fiber_kit_fiber_session":  "fiber_session",
     "fiber_kit_fs_clean":       "fs_clean",
+    "fiber_kit_fs_psc":         "fs_psc",
+    "fiber_kit_exp_linked":     "exp_linked",
     "fiber_kit_exp_xcm":        "exp_xcm",
     # SI-wrapped sorters: klusters_export writes the .clu under the adapter
     # slug (no fiber-style suffix); the raw tag MATCHES the slug.  We fall
