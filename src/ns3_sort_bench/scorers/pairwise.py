@@ -126,9 +126,12 @@ def _ari(tab: np.ndarray) -> float:
     if n <= 1:
         return 0.0
     a = tab.sum(axis=1); b = tab.sum(axis=0)
-    sum_comb_c = (tab * (tab - 1) // 2).sum()
-    sum_comb_a = (a * (a - 1) // 2).sum()
-    sum_comb_b = (b * (b - 1) // 2).sum()
+    # Python ints, not numpy int64: sum_comb_a * sum_comb_b passes 2**63 once
+    # the matched spikes run into the millions (a lab group), and the int64
+    # product wrapped, giving a meaningless ARI with only a RuntimeWarning.
+    sum_comb_c = int((tab * (tab - 1) // 2).sum())
+    sum_comb_a = int((a * (a - 1) // 2).sum())
+    sum_comb_b = int((b * (b - 1) // 2).sum())
     total_comb = n * (n - 1) // 2
     expected = (sum_comb_a * sum_comb_b) / total_comb if total_comb else 0.0
     max_ = (sum_comb_a + sum_comb_b) / 2
