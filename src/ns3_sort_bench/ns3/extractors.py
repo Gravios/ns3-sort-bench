@@ -195,8 +195,9 @@ def _resolve_sort_pair(base: str, elec: int, variant: str = "", tag: str = ""):
         `<base>.res.<variant>.<group>` (no tag) is the one that pairs with the
         tagged `.clu`.
 
-    Resolution: try the staged `.res` first; fall back to the shared `.res` if
-    the tagged copy isn't on disk.  Mirrors fiber-kit's own `read_res_at` /
+    Resolution: try the staged `.res` first; then the shared `.res` of the same
+    token; then the group's one shared `.res` under whatever token it was
+    detected with (`_resolve_any_res`).  Mirrors fiber-kit's own `read_res_at` /
     `read_res` split — staged is strict, shared is a `resolve_any`.
     """
     if HAVE_FK:
@@ -219,13 +220,42 @@ def _resolve_sort_pair(base: str, elec: int, variant: str = "", tag: str = ""):
     elif os.path.exists(res_shared):
         res = res_shared
     else:
-        raise FileNotFoundError(
-            f"no .res for ({base}, group={elec}, variant={variant!r}, tag={tag!r}); "
-            f"tried staged={res_staged!r} and shared={res_shared!r}"
-        )
+        # The shared .res wears the token it was DETECTED under, which need not
+        # be the clustering's (a stderiv_C5 sort over a .res.stderiv_S3.<g>):
+        # take its one physical copy, as fiber-kit's read_res does.
+        res = _resolve_any_res(base, elec, variant)
+        if res is None:
+            raise FileNotFoundError(
+                f"no .res for ({base}, group={elec}, variant={variant!r}, tag={tag!r}); "
+                f"tried staged={res_staged!r}, shared={res_shared!r} and any "
+                f"<base>.res.<token>.{elec}"
+            )
     if not os.path.exists(clu):
         raise FileNotFoundError(clu)
     return res, clu
+
+
+def _resolve_any_res(base: str, elec: int, preferred: str = "") -> "str | None":
+    """The group's one shared .res, whatever method token it carries: fiber-kit's
+    neuro_io.resolve_any when installed, else the same rule here -- the token
+    asked for, then standard / stderiv / sdiff, then the only other
+    <base>.res.<token>.<g> (two or more: None, the caller must name one), then
+    the untagged <base>.res.<g>."""
+    if HAVE_FK:
+        r = _fk_io.resolve_any(base, "res", elec, preferred=preferred)
+        return r.path if r.found else None
+    import glob
+    for tok in [t for t in (preferred, "standard", "stderiv", "sdiff") if t]:
+        if os.path.exists(f"{base}.res.{tok}.{elec}"):
+            return f"{base}.res.{tok}.{elec}"
+    head, tail = os.path.basename(base) + ".res.", f".{elec}"
+    others = [p for p in glob.glob(f"{glob.escape(base)}.res.*.{elec}")
+              if "." not in os.path.basename(p)[len(head):-len(tail)]]
+    if len(others) == 1:
+        return others[0]
+    if os.path.exists(f"{base}.res.{elec}"):
+        return f"{base}.res.{elec}"
+    return None
 
 
 class _NS3SortingSegment(BaseSortingSegment):
