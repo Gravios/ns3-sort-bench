@@ -52,7 +52,9 @@ def load(session_yaml: str, *, electrode_group: int = 7,
     )
 
     cname = name or f"{os.path.splitext(os.path.basename(session_yaml))[0]}_g{electrode_group}"
-    rec.annotate(name=cname)
+    # electrode_group: the adapters that sort a copy of the session's files
+    # (fiber_kit) need the group's number in the session, not 1.
+    rec.annotate(name=cname, electrode_group=int(electrode_group))
 
     # Load the parsed yaml dict so adapter contracts can validate against it.
     from ..ns3.session import load_session_dict

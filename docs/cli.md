@@ -175,8 +175,37 @@ ns3sb load lab:/data/g6_0316.yaml:6:stderiv_C5_D34:exp_final
 ```
 
 The curated sort named by `<variant>:<tag>` serves as the reference
-SortedResult; every registered adapter is run on the raw recording and
-scored against it.
+SortedResult: `<base>.clu.<variant>.<group>.<tag>`, with the stage's own
+`.res` if it has one, else the group's shared `.res` under whatever token it
+was detected with (e.g. `.res.stderiv_S3.<group>`).  Every registered adapter
+is run on the group's channels and scored against it.
+
+Nothing is written beside the session.  The SpikeInterface sorters read the
+group's channels into memory; the fiber_kit adapters sort a scratch copy
+(`<out>/fiber_kit/<item>/` with `--keep-fk-artifacts`, else a temporary folder
+removed after the sort):
+
+- copied: the session yaml and, for the group, every untagged
+  `.res` / `.spk` / `.fet` / `.pca` / `.nst` of each waveform space (no
+  super-sampled `_U` copies, no stage-tagged files, so no earlier `fc_*` stage
+  or curation is read or overwritten);
+- symlinked: the `.fil` / `.dat`, and the probe files the yaml names relative
+  to its folder.
+
+The plan runs in the session's own method, read off its `.spk` the way
+fiber-pipeline does (`.spk.stderiv.<g>`, else the one `stderiv_*` token), and
+the readback is that method's `fc_unmix`.  The bundled tuning is the
+standard-method one, so give the session's own:
+
+```sh
+ns3sb run --corpus lab:/data/0312/sirotaA-jg-000005-20120312.yaml:8:stderiv_C5:cur_pl \
+          --adapters fiber_kit --fk-config /data/0312/fiber-kit-exp-0312.yaml \
+          --keep-fk-artifacts --out runs/0312-g8
+# --fk-method stderiv_C5   when the session has more than one stderiv .spk
+```
+
+A `--fk-config` with a `pipeline:` of its own replaces the bundled plan; if
+that plan does not end in `fc_unmix`, the readback will not find it.
 
 ## Dashboard
 

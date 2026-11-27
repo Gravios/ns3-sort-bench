@@ -5,6 +5,8 @@ Precedence (left wins):
 """
 from __future__ import annotations
 
+import os
+
 import argparse
 import sys
 
@@ -77,6 +79,13 @@ def cmd_run(args) -> int:
         # and never deletes it, so every .res / .spk / .clu / stage log
         # survives the sort for post-hoc inspection by Klusters / fiber-view.
         adapter_kwargs["fk_artifacts_dir"] = f"{output_dir}/fiber_kit"
+    # fiber-kit tuning and, for a lab session, the method to sort in
+    # (default: the session's own stderiv .spk token, adapters/fiber_kit.py
+    # lab_session_method).  $FK_CONFIG still works for the tuning.
+    if getattr(args, "fk_config", ""):
+        adapter_kwargs["fk_config_path"] = os.path.abspath(args.fk_config)
+    if getattr(args, "fk_method", ""):
+        adapter_kwargs["fk_method"] = args.fk_method
 
     bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
                           adapter_kwargs=adapter_kwargs,
@@ -139,6 +148,12 @@ def register(subparsers) -> None:
         help="keep fiber-kit's per-sort tmp dir under <out>/fiber_kit/ "
              "(overrides the plan setting)",
     )
+    ap.add_argument("--fk-config", default="",
+                    help="fiber-kit tuning yaml merged over the bundled one (user keys win; "
+                         "default: $FK_CONFIG, else ./fiber-kit.yaml)")
+    ap.add_argument("--fk-method", default="",
+                    help="method token fiber_kit sorts a lab session in (default: the "
+                         "session's own stderiv .spk token, e.g. stderiv_C5)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the resolved plan and exit without running")
     ap.add_argument("--quiet", action="store_true",

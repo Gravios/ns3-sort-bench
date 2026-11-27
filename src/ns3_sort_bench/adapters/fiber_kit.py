@@ -117,6 +117,103 @@ def _hardlink_or_copy(src: str, dst: str) -> None:
 _SLUG_SAFE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+")
 
 
+# A lab session is never sorted in place: its group is copied to a scratch
+# session (stage_lab_session) and the plan runs there.  Copied: the group's
+# base files of these types, one per waveform space (<base>.<type>[.<variant>].<g>,
+# no stage tag, so no earlier fc_* / curated stage can be picked up or
+# overwritten); linked: the recording and the probe files the yaml names.
+_LAB_GROUP_TYPES = ("res", "spk", "fet", "pca", "nst")
+_LAB_RECORDING_TYPES = ("fil", "dat")
+
+
+def stage_lab_session(lab_base: str, group: int, work_dir: str) -> "tuple[str, list[str]]":
+    """Copy what a sort of `group` reads from the lab session `lab_base` into
+    `work_dir`; return (the scratch session's base, the names placed there).
+
+    * copied: <base>.yaml; for the group, every <base>.<type>[.<variant>].<g>
+      of _LAB_GROUP_TYPES without a stage tag (super-sampled `_U` waveform
+      spaces left out: no stage sorts on them);
+    * symlinked: <base>.fil / .dat (read, never written, by every stage) and
+      each probe file the yaml names by a path relative to its folder (at the
+      same relative path, so the yaml resolves it);
+    * not copied: stage-tagged files (earlier sorts, curations, masks), other
+      groups' files, collision tables -- the plan makes its own.
+    """
+    import glob
+    import shutil
+    src_dir, bname = os.path.split(os.path.abspath(lab_base))
+    os.makedirs(work_dir, exist_ok=True)
+    base = os.path.join(work_dir, bname)
+    placed: list[str] = []
+
+    def put(src: str, link: bool) -> None:
+        dst = os.path.join(work_dir, os.path.relpath(src, src_dir))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if os.path.lexists(dst):
+            os.remove(dst)
+        if link:
+            os.symlink(os.path.abspath(src), dst)
+        else:
+            shutil.copy2(src, dst)
+        placed.append(os.path.relpath(dst, work_dir))
+
+    yaml_src = lab_base + ".yaml"
+    if not os.path.isfile(yaml_src):
+        raise FileNotFoundError(f"lab session: no {yaml_src}")
+    put(yaml_src, link=False)
+    for t in _LAB_RECORDING_TYPES:
+        if os.path.exists(f"{lab_base}.{t}"):
+            put(f"{lab_base}.{t}", link=True)
+    g = str(int(group))
+    for t in _LAB_GROUP_TYPES:
+        for path in sorted(glob.glob(f"{glob.escape(lab_base)}.{t}.*")):
+            toks = os.path.basename(path)[len(bname) + 1:].split(".")   # <type>[.<variant>].<g>
+            if toks[-1] != g or len(toks) > 3:                          # a stage tag, or another group
+                continue
+            if len(toks) == 3 and "_U" in toks[1]:                      # super-sampled waveform space
+                continue
+            put(path, link=False)
+    # probe files the yaml names relative to its folder (fiber-kit's own resolver)
+    try:
+        import yaml as _yaml
+        from fiber_kit import session_yaml as _sy
+        doc = _yaml.safe_load(open(yaml_src)) or {}
+        for pf in _sy.probe_files(doc, src_dir, int(group)) or []:
+            pf = os.path.abspath(pf)
+            if os.path.isfile(pf) and os.path.commonpath([pf, src_dir]) == src_dir:
+                put(pf, link=True)
+    except Exception:  # noqa: BLE001 -- no probe, or an older fiber-kit: sort without geometry
+        pass
+    if not any(n.startswith(f"{bname}.spk.") or n == f"{bname}.spk.{g}" for n in placed):
+        raise FileNotFoundError(f"lab session {lab_base}: no .spk for group {g}")
+    return base, placed
+
+
+def lab_session_method(base: str, group: int) -> str:
+    """The method token to sort a staged lab session in, read off its .spk the
+    way fiber-pipeline's infer_session_variant does: an exact .spk.stderiv.<g>
+    wins; else the single stderiv_* token (no _D feature alias, no _U
+    super-sampled copy); else `standard` when there is a .spk.standard.<g>.
+    Raises when it cannot tell -- pass fk_method= to choose."""
+    import glob
+    g = str(int(group))
+    if os.path.exists(f"{base}.spk.stderiv.{g}"):
+        return "stderiv"
+    bname = os.path.basename(base)
+    toks = []
+    for path in glob.glob(f"{glob.escape(base)}.spk.stderiv_*.{g}"):
+        t = os.path.basename(path)[len(bname) + len(".spk."):-len(f".{g}")]
+        if "." in t or "_D" in t or "_U" in t:
+            continue
+        toks.append(t)
+    if len(toks) == 1:
+        return toks[0]
+    if not toks and os.path.exists(f"{base}.spk.standard.{g}"):
+        return "standard"
+    raise ValueError(f"lab session {base}: cannot tell which method to sort group {g} in "
+                     f"(stderiv .spk tokens: {sorted(toks) or 'none'}); pass fk_method=")
+
+
 def _slugify(name: str) -> str:
     """Filesystem-safe form of a corpus-item name.  Keeps `[A-Za-z0-9._+-]`,
     replaces every other character (including `:` and `/`) with `_`.
@@ -566,11 +663,18 @@ def _contract_for(mode: str, with_deconv: bool) -> Contract:
             "and needs that version's stages (fiber-flag-collisions, fiber-polish "
             "--realign-topch, fiber-clean --junk residue, fiber-unmix) and knobs; "
             "fiber-unmix reads the session's .fil.",
+            "A lab session (lab: corpus) is sorted in a scratch copy, never in place: "
+            "its yaml and the group's untagged .res/.spk/.fet/.pca/.nst of every "
+            "waveform space are copied, the .fil/.dat and relative probe files "
+            "symlinked (stage_lab_session).  The method is the session's stderiv "
+            ".spk token (lab_session_method; fk_method= to choose), and the readback "
+            "is that method's fc_unmix.  The bundled tuning is the standard-method "
+            "one: pass fk_config_path= (or $FK_CONFIG) with the session's own.",
             "Variant/tag names must match the stage output you want "
-            "(a materialised recording reads back standard / fc_unmix; a "
-            "session that already has its spike files defaults to "
-            "stderiv_C5_D34 / exp_final — pass variant= and tag= when the "
-            "plan that ran on it ends elsewhere).",
+            "(a materialised recording reads back standard / fc_unmix, a lab "
+            "session its method / fc_unmix — pass variant= and tag= when the "
+            "plan that ran ends elsewhere, e.g. a fk_config_path= with its own "
+            "pipeline:).",
             "Requires neurosuite-3's ndm_detectspikes, ndm_extractspikes and "
             "ndm_pca on PATH.  For a from-scratch SpikeInterface recording "
             "(SpikeForest paired items, Propper simulator, ...) the adapter "
@@ -929,27 +1033,37 @@ class _FiberKitBase(SorterAdapter):
             raise TypeError("fiber_kit adapter needs a SpikeInterface BaseRecording")
 
         env = {**os.environ, **self._env_overrides, **kwargs.get("env", {})}
-        group = int(kwargs.get("electrode_group", 1))
+        # The group: the caller's, else the one a lab corpus annotated on its
+        # recording (corpus/lab_sessions.py), else 1 (a materialised recording
+        # is written as group 1).
+        group = int(kwargs.get("electrode_group")
+                    or recording.get_annotation("electrode_group", None) or 1)
 
-        sess_base = recording.get_annotation("session_base", None)
-        tmp_dir = None
+        lab_base = recording.get_annotation("session_base", None)
         fk_provenance: Dict[str, Any] = {}
-        materialised = False
-        keep_artifacts = False
-        if sess_base is None:
-            materialised = True
-            fk_artifacts_dir = kwargs.get("fk_artifacts_dir")
-            if fk_artifacts_dir:
-                # Persistent mode: place the session dir under the caller's
-                # artifacts root, named by the corpus item (slugified).  The
-                # dir is NOT deleted after the sort finishes — its full
-                # contents survive for post-hoc inspection — but it IS
-                # emptied before the sort starts (see _fresh_artifacts_dir).
-                slug = _slugify(str(kwargs.get("corpus_name") or "sort"))
-                tmp_dir = _fresh_artifacts_dir(fk_artifacts_dir, slug)
-                keep_artifacts = True
-            else:
-                tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
+        materialised = lab_base is None
+        # Every sort runs in a scratch session of its own: built from the
+        # recording, or (a lab session) a copy of the group's files.  Nothing
+        # is written beside the lab session itself.
+        fk_artifacts_dir = kwargs.get("fk_artifacts_dir")
+        keep_artifacts = bool(fk_artifacts_dir)
+        if fk_artifacts_dir:
+            # Persistent mode: place the session dir under the caller's
+            # artifacts root, named by the corpus item (slugified).  The
+            # dir is NOT deleted after the sort finishes — its full
+            # contents survive for post-hoc inspection — but it IS
+            # emptied before the sort starts (see _fresh_artifacts_dir).
+            slug = _slugify(str(kwargs.get("corpus_name") or "sort"))
+            tmp_dir = _fresh_artifacts_dir(fk_artifacts_dir, slug)
+        else:
+            tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
+        method = _NS3_METHOD
+        if not materialised:
+            sess_base, staged = stage_lab_session(lab_base, group, tmp_dir)
+            method = kwargs.get("fk_method") or lab_session_method(sess_base, group)
+            fk_provenance["lab_session"] = lab_base
+            fk_provenance["lab_files"] = staged
+        if materialised:
             sess_base = self._materialise_recording(recording, tmp_dir)
             # fiber-session expects a Klusters-convention .res + .spk alongside
             # the .fil / .yaml we just wrote.  Detect and emit them now,
@@ -978,29 +1092,29 @@ class _FiberKitBase(SorterAdapter):
                     "`programs:` → ndm_detectspikes block."
                 )
 
-            # fiber-kit.yaml setup — always write a per-session merge of
-            # the baseline (configs/fiber_kit.yaml `fiber_kit:` section) and
-            # the user's own ./fiber-kit.yaml (or $FK_CONFIG, or an
-            # explicit fk_config_path), with USER KEYS WINNING on conflict.
-            # Pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and
-            # keeps the user's CA1 tuning (FK_XCM_*, FK_CHUNKS, ...) intact.
-            # No channel-count auto overrides: the tetrode set tried in
-            # 188dbab left d11221.001 unchanged (same 13 clusters, IoU
-            # 0.0441).  Three of its five keys tune fiber-link /
-            # fiber-backbone-link, which the embedded plan does not run.
-            # Point FK_CONFIG at the merged file so every stage sees it.
-            fk_config = self._write_fk_config(
-                tmp_dir,
-                user_cfg_path=kwargs.get("fk_config_path"),
-            )
-            env["FK_CONFIG"] = fk_config
-            fk_cfg_source, fk_cfg_origin = _resolve_user_fk_config(
-                kwargs.get("fk_config_path"), quiet=True)
-            fk_provenance = dict(
-                fk_config_user=fk_cfg_source,
-                fk_config_user_origin=fk_cfg_origin,
-                fk_config_sha256=fk_config_digest(fk_config),
-            )
+        # fiber-kit.yaml setup — always write a per-session merge of
+        # the baseline (configs/fiber_kit.yaml `fiber_kit:` section) and
+        # the user's own ./fiber-kit.yaml (or $FK_CONFIG, or an
+        # explicit fk_config_path), with USER KEYS WINNING on conflict.
+        # Pins FK_SESSION_REALIGN=off (no .spk.stderiv.<g> exists) and
+        # keeps the user's CA1 tuning (FK_XCM_*, FK_CHUNKS, ...) intact.
+        # No channel-count auto overrides: the tetrode set tried in
+        # 188dbab left d11221.001 unchanged (same 13 clusters, IoU
+        # 0.0441).  Three of its five keys tune fiber-link /
+        # fiber-backbone-link, which the embedded plan does not run.
+        # Point FK_CONFIG at the merged file so every stage sees it.
+        fk_config = self._write_fk_config(
+            tmp_dir,
+            user_cfg_path=kwargs.get("fk_config_path"),
+        )
+        env["FK_CONFIG"] = fk_config
+        fk_cfg_source, fk_cfg_origin = _resolve_user_fk_config(
+            kwargs.get("fk_config_path"), quiet=True)
+        fk_provenance.update(
+            fk_config_user=fk_cfg_source,
+            fk_config_user_origin=fk_cfg_origin,
+            fk_config_sha256=fk_config_digest(fk_config),
+        )
 
         # Inject the method token on auto-materialised runs so every stage
         # resolves our raw .spk.standard.<g> / .res.standard.<g> files
@@ -1011,59 +1125,50 @@ class _FiberKitBase(SorterAdapter):
         # fiber-realign ("unrecognized arguments: --method standard" —
         # observed on the hc1_full run).
         #
-        # Lab-session usage keeps whatever --method is baked into
-        # extra_args / env (materialised is False — no injection).
+        # A lab session gets its own method (lab_session_method, or the
+        # caller's fk_method) the same way.
         base_args = list(kwargs.get("extra_args", []))
         per_stage_args = {
             stage: list(base_args) for stage in self._MODE_STAGES[self._mode]
         }
-        if materialised:
-            for stage, flags in _stage_method_flags(_NS3_METHOD).items():
-                if stage in per_stage_args:
-                    per_stage_args[stage] = flags + per_stage_args[stage]
-            # Session-specific input paths — two stages' input-clu lookup
-            # defaults don't match the method-tagged names we produce:
-            #
-            #   fiber-realign  default --clu = legacy UNTAGGED
-            #                  <base>.clu.<group>; we point it at
-            #                  fiber-session's <...>.clu.standard.<g>.fiber_session
-            #   fiber-refine   default --in-clu lookup is
-            #                  prefer_canonical() = ["", "stderiv", "D"]
-            #                  which doesn't include "standard".  Without
-            #                  --in-clu, fiber-refine silently starts a
-            #                  fresh fine sort instead of reading
-            #                  fiber-realign's output (<...>.clu.standard.<g>).
-            session_clu = _klusters_path(sess_base, "clu", group,
-                                            method=_NS3_METHOD)
-            fs_clu       = f"{session_clu}.fiber_session"
-            realign_out  = session_clu                         # canonical, no tag
-            if "fiber-realign" in per_stage_args:
-                per_stage_args["fiber-realign"] = [
-                    "--clu", fs_clu, *per_stage_args["fiber-realign"]
-                ]
-            if "fiber-refine" in per_stage_args:
-                per_stage_args["fiber-refine"] = [
-                    "--in-clu", realign_out,
-                    *per_stage_args["fiber-refine"],
-                ]
+        for stage, flags in _stage_method_flags(method).items():
+            if stage in per_stage_args:
+                per_stage_args[stage] = flags + per_stage_args[stage]
+        # Session-specific input paths — two stages' input-clu lookup
+        # defaults don't match the method-tagged names we produce:
+        #
+        #   fiber-realign  default --clu = legacy UNTAGGED
+        #                  <base>.clu.<group>; we point it at
+        #                  fiber-session's <...>.clu.standard.<g>.fiber_session
+        #   fiber-refine   default --in-clu lookup is
+        #                  prefer_canonical() = ["", "stderiv", "D"]
+        #                  which doesn't include "standard".  Without
+        #                  --in-clu, fiber-refine silently starts a
+        #                  fresh fine sort instead of reading
+        #                  fiber-realign's output (<...>.clu.standard.<g>).
+        session_clu = _klusters_path(sess_base, "clu", group,
+                                        method=method)
+        fs_clu       = f"{session_clu}.fiber_session"
+        realign_out  = session_clu                         # canonical, no tag
+        if "fiber-realign" in per_stage_args:
+            per_stage_args["fiber-realign"] = [
+                "--clu", fs_clu, *per_stage_args["fiber-realign"]
+            ]
+        if "fiber-refine" in per_stage_args:
+            per_stage_args["fiber-refine"] = [
+                "--in-clu", realign_out,
+                *per_stage_args["fiber-refine"],
+            ]
 
         with measure_runtime() as rt:
             for stage in self._MODE_STAGES[self._mode]:
                 self._run_stage(stage, sess_base, group, env=env,
-                                 extra_args=per_stage_args[stage])
+                                 extra_args=per_stage_args[stage], method=method)
 
-        # Readback defaults.  For a lab-session sort the user's full pipeline
-        # emits `stderiv_C5_D34` / `exp_final` at the end.  For an auto-
-        # materialised sort we only produced the standard-family chain, so the
-        # end-of-chain tag is mode-dependent (see _MODE_FINAL_TAG).
-        if materialised:
-            default_variant = _NS3_METHOD
-            default_tag = self._MODE_FINAL_TAG[self._mode]
-        else:
-            default_variant = "stderiv_C5_D34"
-            default_tag = "exp_final"
-        variant = kwargs.get("variant", default_variant)
-        tag = kwargs.get("tag", default_tag)
+        # Readback: the scratch session's own sort, in the method it ran in,
+        # under the tag the mode's chain ends in (_MODE_FINAL_TAG).
+        variant = kwargs.get("variant", method)
+        tag = kwargs.get("tag", self._MODE_FINAL_TAG[self._mode])
         sort_ex = NS3SortingExtractor(
             sess_base + ".yaml", electrode_group=group,
             variant=variant, tag=tag,
@@ -1083,7 +1188,7 @@ class _FiberKitBase(SorterAdapter):
         # primary readback above, so re-scoring would just duplicate the
         # fiber_kit row.
         stage_results: Dict[str, "SortedResult"] = {}
-        if self._mode == "fiber_kit" and materialised:
+        if self._mode == "fiber_kit":
             for stage_tag in _FIBER_KIT_SCOREABLE_STAGES:
                 stage_result = self._readback_stage_result(
                     sess_base, group, variant, stage_tag, recording,
@@ -1217,7 +1322,7 @@ class _FiberKitBase(SorterAdapter):
             yaml.safe_dump(yml, f, sort_keys=False)
         return base
 
-    def _run_stage(self, stage, sess_base, group, *, env, extra_args):
+    def _run_stage(self, stage, sess_base, group, *, env, extra_args, method=_NS3_METHOD):
         if stage == "fiber-pipeline":
             # fiber-pipeline <elec> is the bash driver: takes the group as
             # its ONE positional arg, resolves the session from FK_DIR +
@@ -1235,7 +1340,7 @@ class _FiberKitBase(SorterAdapter):
             env.setdefault("FK_DIR",  sess_dir or ".")
             env.setdefault("FK_SESS", sess_name)
             cmd = ["fiber-pipeline", str(group),
-                   "--method", _NS3_METHOD, *list(extra_args)]
+                   "--method", method, *list(extra_args)]
             log_path = f"{sess_base}.fiber-pipeline.log"
         else:
             cmd = [stage, sess_base, str(group), *list(extra_args)]
@@ -1261,7 +1366,7 @@ class _FiberKitBase(SorterAdapter):
         caller just omits the missing stage from stage_results.
         """
         from ..ns3.extractors import NS3SortingExtractor
-        clu_path = _klusters_path(sess_base, "clu", group) + f".{stage_tag}"
+        clu_path = _klusters_path(sess_base, "clu", group, method=variant) + f".{stage_tag}"
         if not os.path.isfile(clu_path):
             return None
         try:
