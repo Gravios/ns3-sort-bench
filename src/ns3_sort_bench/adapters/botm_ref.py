@@ -355,13 +355,13 @@ def _discriminant_all_numpy(residual, f, c, tpl_samples):
 
 def _discriminant_all_torch(residual, f, c, tpl_samples, *, device):
     """Single batched conv1d: one call computes the discriminant for every
-    template × every time at once.  `conv1d` is cross-correlation applied to
-    a flipped kernel — fiber-kit and scipy use the same trick — so the
-    output equals `sum_ch correlate(r[:, ch], f[u, :, ch], 'valid')`.
+    template × every time at once.  torch's `conv1d` is a cross-correlation
+    (it does not flip its kernel), as `np.correlate` is, so with the kernel
+    as is the output equals `sum_ch correlate(r[:, ch], f[u, :, ch], 'valid')`.
 
     Layout notes:
       residual: (n_samp, n_ch) → torch (1, n_ch, n_samp)
-      f:        (T, tpl_samples, n_ch) → torch (T, n_ch, tpl_samples) flipped
+      f:        (T, tpl_samples, n_ch) → torch (T, n_ch, tpl_samples)
       conv1d(1, n_ch, n_samp) × kernel(T, n_ch, K) → (1, T, out_len)
     """
     import torch                                           # local to keep optional
@@ -372,11 +372,10 @@ def _discriminant_all_torch(residual, f, c, tpl_samples, *, device):
         return np.full((T, 0), -np.inf)
     R = torch.from_numpy(np.ascontiguousarray(residual.T, np.float32))
     R = R.to(device=device)[None]                          # (1, n_ch, n_samp)
-    # f: (T, tpl_samples, n_ch) → (T, n_ch, tpl_samples); flip last dim for
-    # cross-correlation.
+    # f: (T, tpl_samples, n_ch) → (T, n_ch, tpl_samples).  No flip: conv1d
+    # already correlates; flipping made it a convolution.
     F = torch.from_numpy(np.ascontiguousarray(
         f.transpose(0, 2, 1), np.float32)).to(device=device)
-    F = torch.flip(F, dims=(-1,))
     with torch.inference_mode():
         out = torch.nn.functional.conv1d(R, F).squeeze(0)  # (T, out_len)
         out = out + torch.from_numpy(np.asarray(c, np.float32)) \
