@@ -82,22 +82,20 @@ pip install -e '.[dev]'
 Pick `[test]` instead when you want the test runner but only a chosen
 subset of sorter extras — e.g. `pip install -e '.[fiber-kit,test]'`.
 
-## What `[all]` does NOT include — SLAy
+## SLAy
 
-SLAy's upstream `pyproject.toml` pins `requires-python = "~=3.11.0"`
-(Python 3.11.x only), which conflicts with the rest of the stack
-running on Python 3.13.  Install SLAy standalone in its own 3.11 env:
+SLAy comes from the [Gravios/SLAy](https://github.com/Gravios/SLAy) fork,
+which runs on Python 3.11-3.13 and SpikeInterface 0.105 (upstream pins
+Python 3.11 and does not import on 0.105).  It installs into the same
+environment as everything else; the extra brings Kilosort 4, which SLAy
+post-processes:
 
 ```sh
-pyenv shell 3.11.x                    # or `conda create -n slay python=3.11`
-python -m venv .venv-slay
-source .venv-slay/bin/activate
 pip install -e '.[slay]'
 ```
 
-The `slay_vs_fiberlink` runner handles the two-env split by writing an
-intermediate `SortedResult` cache that each env reads from its own
-Python interpreter.
+It is not yet in `[all]` or `requirements.lock`: the lock wants the fork's
+commit, which exists once the fork is on GitHub.
 
 ## Lockfile reproducibility
 

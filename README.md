@@ -14,7 +14,7 @@ Target sorters:
 - **fiber-kit** — the subject of the comparison; three modes
 - **Kilosort 4** — Pachitariu 2024
 - **DARTsort** — Boussard, Varol, Paninski 2023+
-- **SLAy** — Janelia 2025 (merge-step post-pass on Kilosort 4)
+- **SLAy** — Koukuntla et al. 2025 (merge-step post-pass on Kilosort 4)
 - **MountainSort 5**, **Tridesclous 2**, **SpykingCircus 2**
 - **32 lattice-ablation configs** of fiber_deconv (OMP / SIC-A / SIC-B /
   SIC-C × integer / R=4 bank × amp-prior on/off × VAR(4) / spatial-only)
@@ -30,7 +30,7 @@ pip install -e .                                  # core (BOTM reference + simul
 pip install -e '.[fiber-kit]'                     # + the fiber-kit chain + lattice
 pip install -e '.[kilosort4]'                     # + Kilosort 4 (GPU recommended)
 pip install -e '.[dartsort]'                      # + DARTsort (GPU required)
-pip install -e '.[slay]'                          # + SLAy (post-pass on KS4; Python 3.11 only)
+pip install -e '.[slay]'                          # + SLAy (merge post-pass on KS4; Gravios/SLAy fork)
 pip install -e '.[mountainsort5,tridesclous2]'    # + SI-wrapped sorters
 pip install -e '.[spykingcircus2]'                # + SpykingCircus 2 (built into SpikeInterface)
 pip install -e '.[spikeforest]'                   # + SpikeForest corpus
@@ -66,7 +66,7 @@ that comes from SpikeInterface, not from this package.
 
 Optional sorter extras pin their upstream to its latest known-good
 release (Kilosort 4.1.7, MountainSort 5.0.5.9, Tridesclous 1.6.9,
-DARTsort 0.5.31, SLAy from git+main).
+DARTsort 0.5.31, SLAy from the Gravios/SLAy fork's main).
 
 ## Contracts
 
@@ -154,7 +154,7 @@ returning a `ScoreResult`.  Register with `_register(scorer_registry, ...)`.
   and their application to a working memory study," TU Berlin dissertation
 - Boussard et al. (2023), "DARTsort: A modular drift tracking spike sorter"
 - Pachitariu et al. (2024), "Kilosort 4"
-- Janelia (2025), "SLAy-ing oversplitting errors in high-density ephys"
+- Koukuntla et al. (2025), SLAy, bioRxiv 10.1101/2025.06.20.660590
 
 ## License
 

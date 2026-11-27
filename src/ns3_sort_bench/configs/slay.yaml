@@ -1,19 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # SLAy adapter config
 # ─────────────────────────────────────────────────────────────────────────────
-# Read by src/ns3_sort_bench/adapters/slay.py.  Two blocks:
+# Read by src/ns3_sort_bench/adapters/slay.py.  Three blocks:
 #
 #   ks_kwargs:   forwarded to the wrapped kilosort4 adapter's sort().
 #                Empty = inherit configs/kilosort4.yaml.
-#   slay_kwargs: forwarded to slay.merge.recommend_merges(**kwargs).
-#
-# slay_kwargs is deliberately EMPTY.  _slay_merges wraps the call in a
-# bare `except Exception: return []`, so an unrecognised kwarg would not
-# error — it would silently return zero merges and slay would equal
-# kilosort4.  Add keys here only after confirming them against the
-# installed slay's recommend_merges signature
-# (python3 -c "import inspect, slay.merge as m; print(inspect.signature(m.recommend_merges))").
+#   slay_kwargs: forwarded to slay.compute_slay_merges(analyzer, **kwargs).
+#                Its keyword arguments: merge_parameters ("auto", None or
+#                {k1, k2, merge_threshold}), splitting_probability,
+#                max_distance, autoencoder_params, similarity_threshold,
+#                retrain_autoencoder, model_path, correlogram_params,
+#                maximum_contamination, similarity_type ("autoencoder" | "l2").
+#                A key it does not take is a TypeError, not a silent no-op.
+#                Empty = SLAy's defaults (autoencoder, automatic parameters).
+#   analyzer:    the SortingAnalyzer the adapter builds for SLAy
+#                (slay_merge_groups): max_spikes_per_unit, correlogram_window_ms,
+#                correlogram_bin_ms, freq_min / freq_max of the band-pass applied
+#                to a recording SpikeInterface does not mark filtered.
 # ─────────────────────────────────────────────────────────────────────────────
 
 ks_kwargs: {}
 slay_kwargs: {}
+analyzer:
+  max_spikes_per_unit:   500
+  correlogram_window_ms: 100.0   # SLAy's README value; <= 2 ms bins recommended
+  correlogram_bin_ms:    1.0
+  freq_min:              300.0
+  freq_max:              6000.0

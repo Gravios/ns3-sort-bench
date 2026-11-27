@@ -194,18 +194,27 @@ def test_tridesclous2_config_uses_valid_si_keys():
     assert not bad, f"invalid Tridesclous2 keys: {sorted(bad)}"
 
 
-def test_slay_config_has_both_blocks_and_no_unverified_merge_kwargs():
-    """slay_kwargs feed a call wrapped in a bare `except: return []`, so
-    a wrong key fails SILENTLY (zero merges).  Keep it empty until a
-    key is verified against slay.merge.recommend_merges."""
+def test_slay_config_blocks_and_merge_kwargs():
+    """slay_kwargs go to slay.compute_slay_merges; every key must be one of
+    its parameters (checked against the installed slay when there is one)."""
+    import inspect
     cfg = load_adapter_config("slay")
     assert isinstance(cfg["ks_kwargs"], dict)
-    assert cfg["slay_kwargs"] == {}
+    assert isinstance(cfg["slay_kwargs"], dict)
+    assert set(cfg["analyzer"]) <= {"max_spikes_per_unit", "correlogram_window_ms",
+                                    "correlogram_bin_ms", "freq_min", "freq_max"}
+    try:
+        from slay import compute_slay_merges
+    except ImportError:
+        return
+    params = set(inspect.signature(compute_slay_merges).parameters)
+    assert set(cfg["slay_kwargs"]) <= params
 
 
 def test_slay_adapter_picks_up_both_blocks():
     from ns3_sort_bench.adapters.slay import (
-        _SLAY_KS_DEFAULTS, _SLAY_MERGE_DEFAULTS,
+        _SLAY_KS_DEFAULTS, _SLAY_MERGE_DEFAULTS, _SLAY_ANALYZER_DEFAULTS,
     )
     assert isinstance(_SLAY_KS_DEFAULTS, dict)
     assert isinstance(_SLAY_MERGE_DEFAULTS, dict)
+    assert _SLAY_ANALYZER_DEFAULTS["correlogram_bin_ms"] == 1.0

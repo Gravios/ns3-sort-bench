@@ -82,13 +82,14 @@ kilosort4     = ["kilosort == 4.1.7"]
 # torch >= 2.2 — upstream metadata takes care of both.
 dartsort = ["dartsort == 0.5.31"]
 
-# SLAy (Janelia 2025).  Upstream pins requires-python = "~=3.11.0", so this
-# extra is INCOMPATIBLE with the rest of [all] on Python 3.12+; install
-# SLAy standalone in a dedicated Python 3.11 env.  Upstream repo is the
-# first author's — Saikou Koukuntla (saikoukunt), NOT the JaneliaSciComp
-# path earlier scaffolding guessed (that path 404s).
+# SLAy (Koukuntla et al. 2025), from the Gravios/SLAy fork of saikoukunt/SLAy:
+# upstream pins requires-python = "~=3.11.0" and does not import on
+# SpikeInterface 0.105; the fork runs on Python 3.11-3.13 and 0.105 and
+# carries fixes and tests of its own.  Wraps Kilosort 4, so it brings that
+# extra along.
 slay = [
-    "slay @ git+https://github.com/saikoukunt/SLAy.git",
+    "ns3-sort-bench[kilosort4]",
+    "slay @ git+https://github.com/Gravios/SLAy.git",
 ]
 
 # SpikeForest ground-truth corpus loader
@@ -125,8 +126,8 @@ dev = [
     "ruff>=0.6",
 ]
 
-# EVERYTHING pip-installable in one Python env.  Excludes SLAy (needs
-# its own Python 3.11 env, see the [slay] comment above).  Resolves to
+# EVERYTHING pip-installable in one Python env.  SLAy is not in it yet:
+# requirements.lock wants the Gravios/SLAy fork's commit.  Resolves to
 # ~148 packages, ~3 GB installed with the CUDA 13 wheels torch and
 # faiss pull in.  Verified cleanly on Python 3.13.18 / linux-x86_64 on
 # 2026-11-02.  Includes [test] so a full install can self-check with
