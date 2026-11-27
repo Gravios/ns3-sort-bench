@@ -75,7 +75,7 @@ fiber-kit = [
 # bump requires re-resolving against the full [all] set and re-running CI.
 mountainsort5 = ["mountainsort5 == 0.5.9"]
 tridesclous2  = ["tridesclous == 1.6.9"]
-spykingcircus2 = []   # upstream `circus` package install is per-OS; see docs/sorter-installs.md
+spykingcircus2 = ["numba>=0.60", "hdbscan>=0.8.33"]   # built into SpikeInterface; these are what its check wants
 kilosort4     = ["kilosort == 4.1.7"]
 
 # DARTsort (Boussard, Varol, Paninski 2023+).  Needs Python >= 3.12 and
@@ -104,7 +104,7 @@ accel = ["numba>=0.60"]
 # CPU-only sorter bundle — no torch, no GPU wheels (~400 MB total install).
 # Includes [test] so `pytest tests/` works on a GPU-less workstation too.
 all-cpu = [
-    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spikeforest,accel,test]",
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spykingcircus2,spikeforest,accel,test]",
 ]
 
 # Test runner — enough to `pytest tests/` without pulling in developer
@@ -132,7 +132,7 @@ dev = [
 # 2026-11-02.  Includes [test] so a full install can self-check with
 # `pytest tests/` out of the box.
 all = [
-    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,kilosort4,dartsort,spikeforest,ibl,accel,test]",
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spykingcircus2,kilosort4,dartsort,spikeforest,ibl,accel,test]",
 ]
 
 [project.scripts]

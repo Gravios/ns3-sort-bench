@@ -49,6 +49,10 @@ class _SISorterBase(SorterAdapter):
     """Shared machinery for SI-wrapped sorters."""
     _si_name: str = ""
     _package_name: str = ""
+    # A sorter built into SpikeInterface has no package of its own: it is
+    # available when SpikeInterface's own check (`is_installed()`) passes,
+    # and its version is SpikeInterface's.
+    _si_internal: bool = False
     _run_kwargs: dict = {}
     _contract: Optional[Contract] = None
 
@@ -57,9 +61,18 @@ class _SISorterBase(SorterAdapter):
 
     def _detect(self):
         try:
-            import spikeinterface  # noqa: F401
+            import spikeinterface
         except ImportError:
             return False, "spikeinterface not installed", ""
+        if self._si_internal:
+            from spikeinterface.sorters import sorter_dict
+            if sorter_dict[self._si_name].is_installed():
+                return True, "", f"spikeinterface-{spikeinterface.__version__}"
+            return (False,
+                    f"SpikeInterface's {self._si_name} is missing a dependency: "
+                    f"numba or hdbscan (`pip install -e '.[{self.name}]'` in the "
+                    f"ns3-sort-bench checkout)",
+                    "")
         try:
             if self._package_name:
                 import importlib
@@ -178,12 +191,16 @@ class Tridesclous2Adapter(_SISorterBase):
 class SpykingCircus2Adapter(_SISorterBase):
     name = "spykingcircus2"
     _si_name = "spykingcircus2"
-    _package_name = "circus"
+    # Built into SpikeInterface (sorters/internal/spyking_circus2.py); its
+    # check wants scipy, numba and hdbscan.  The `circus` package probed
+    # here before is SpyKING CIRCUS 1, which SpikeInterface 0.105 does not
+    # use for this sorter.
+    _si_internal = True
     _run_kwargs = _run_kwargs_from_config("spykingcircus2")
     _contract = Contract(
         adapter_name="spykingcircus2",
-        upstream_url="https://github.com/spyking-circus/spyking-circus",
-        upstream_version_pin="docs/sorter-installs.md",   # non-PyPI install
+        upstream_url="https://github.com/SpikeInterface/spikeinterface",
+        upstream_version_pin="spikeinterface >=0.105.4,<0.106 (built in)",
         yaml_fields_required=_COMMON_YAML_REQ,
         yaml_fields_optional=_COMMON_YAML_OPT,
         recording=RecordingReqs(

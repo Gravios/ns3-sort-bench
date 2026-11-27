@@ -130,7 +130,9 @@ h5py==3.16.0
     #   pynwb
     #   sortingview
 hdbscan==0.8.44
-    # via tridesclous
+    # via
+    #   ns3-sort-bench (pyproject.toml)
+    #   tridesclous
 hdmf==6.2.0
     # via pynwb
 holoviews==1.23.2
