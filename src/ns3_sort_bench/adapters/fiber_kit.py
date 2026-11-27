@@ -755,7 +755,7 @@ class _FiberKitBase(SorterAdapter):
 
     def available(self):
         if not self._available:
-            return False, "fiber_kit not installed (`pip install ns3-sort-bench[fiber-kit]`)"
+            return False, "fiber_kit not installed (`pip install -e '.[fiber-kit]'` in the ns3-sort-bench checkout)"
         return True, ""
 
     # Chain order matters: fiber-cpos sits BETWEEN fiber-refine and

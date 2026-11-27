@@ -123,7 +123,7 @@ def list_datasets(args) -> int:
                                study_name=args.study_name)
     except ImportError as e:
         eprint(f"upstream dep missing: {e}")
-        eprint("  pip install 'ns3-sort-bench[spikeforest]'")
+        eprint("  pip install -e '.[spikeforest]'")
         return 2
     if not rows:
         eprint(f"(no recordings for study_set={args.study_set!r}, study_name={args.study_name!r})")

@@ -26,7 +26,7 @@ numbers that the field reports, `PAIRED_KAMPFF` is the convention.
 ## Install
 
 ```sh
-pip install 'ns3-sort-bench[spikeforest,all]'
+pip install -e '.[spikeforest,all]'
 # first-time kachery-cloud auth (follow the prompt):
 kachery-cloud-init
 ```
@@ -119,7 +119,7 @@ convention differs by more than half a sample from SpikeForest's.
 
 ## First-time kachery notes
 
-- `pip install 'ns3-sort-bench[spikeforest]'` pulls `kachery_cloud` as a dep.
+- `pip install -e '.[spikeforest]'` pulls `kachery_cloud` as a dep.
 - Run `kachery-cloud-init` once and follow the console link to associate
   this workstation with a free kachery-cloud account.
 - Each paired recording is tens of MB; the full index is ~1 MB.

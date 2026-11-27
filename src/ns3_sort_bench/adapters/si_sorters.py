@@ -99,7 +99,7 @@ class _SISorterBase(SorterAdapter):
         except ImportError:
             return (False,
                     f"{self._package_name} not installed "
-                    f"(`pip install ns3-sort-bench[{self.name}]`)",
+                    f"(`pip install -e '.[{self.name}]'` in the ns3-sort-bench checkout)",
                     "")
 
     @property

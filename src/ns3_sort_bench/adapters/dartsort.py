@@ -80,7 +80,7 @@ class DARTsortAdapter(SorterAdapter):
             import dartsort
             return True, "", getattr(dartsort, "__version__", "unknown")
         except ImportError as e:
-            return False, f"dartsort not installed (`pip install ns3-sort-bench[dartsort]`): {e}", ""
+            return False, f"dartsort not installed (`pip install -e '.[dartsort]'` in the ns3-sort-bench checkout): {e}", ""
 
     @property
     def contract(self) -> Contract: return CONTRACT

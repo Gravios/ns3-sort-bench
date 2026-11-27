@@ -5,19 +5,22 @@
 
 ## TL;DR
 
+ns3-sort-bench is not on PyPI: run these in a clone of the repository.
+Keep the quotes round an extra; zsh reads `[...]` as a glob otherwise.
+
 ```sh
 # Core only (BOTM reference + simulator + harness; ~10 packages, no GPU)
-pip install ns3-sort-bench
+pip install -e .
 
 # CPU-only sorter bundle (no torch, no CUDA wheels; ~400 MB)
-pip install ns3-sort-bench[all-cpu]
+pip install -e '.[all-cpu]'
 
 # Everything except SLAy (~148 packages, ~3 GB with CUDA 13 wheels)
-pip install ns3-sort-bench[all]
+pip install -e '.[all]'
 
 # Developing the harness itself — [all] + ruff; same packages as [all]
 # plus the linter.
-pip install ns3-sort-bench[dev]
+pip install -e '.[dev]'
 
 # Reproducible — install the exact resolved environment the smoke tests pass against
 pip install -r requirements.lock
@@ -30,7 +33,7 @@ Resolved against **Python 3.13.18, linux-x86_64, 2026-11-02** (see
 `requirements.lock` for the full 148-package manifest).  The table
 shows the versions in that lockfile.  `pyproject.toml` itself declares
 ranges for the core (numpy, scipy and pyyaml with fiber-kit's floors), so
-`pip install ns3-sort-bench` into an environment that already has
+`pip install -e .` into an environment that already has
 fiber-kit keeps the numpy / scipy / pandas installed there; only the
 sorters and SpikeInterface's minor series are held fixed.  Use the
 lockfile in a fresh environment when the numbers must be reproducible.
@@ -60,11 +63,11 @@ pytest tests/ -q                                    # 20-ish hermetic cases
 pytest tests/ --cov=ns3_sort_bench --cov-report=term-missing  # with coverage
 ```
 
-For a core-only install (`pip install ns3-sort-bench`), add the test
+For a core-only install (`pip install -e .`), add the test
 extra explicitly:
 
 ```sh
-pip install 'ns3-sort-bench[test]'
+pip install -e '.[test]'
 ```
 
 `[dev]` is the kitchen-sink developer install: it references `[all]`
@@ -73,11 +76,11 @@ command gives you the full sorter stack, corpora loaders, test
 runner, and linter:
 
 ```sh
-pip install 'ns3-sort-bench[dev]'
+pip install -e '.[dev]'
 ```
 
 Pick `[test]` instead when you want the test runner but only a chosen
-subset of sorter extras — e.g. `pip install 'ns3-sort-bench[fiber-kit,test]'`.
+subset of sorter extras — e.g. `pip install -e '.[fiber-kit,test]'`.
 
 ## What `[all]` does NOT include — SLAy
 
@@ -89,7 +92,7 @@ running on Python 3.13.  Install SLAy standalone in its own 3.11 env:
 pyenv shell 3.11.x                    # or `conda create -n slay python=3.11`
 python -m venv .venv-slay
 source .venv-slay/bin/activate
-pip install ns3-sort-bench[slay]
+pip install -e '.[slay]'
 ```
 
 The `slay_vs_fiberlink` runner handles the two-env split by writing an
@@ -145,7 +148,7 @@ authenticates.
 Needs an IBL account.  Initialise ONE before the first corpus pull:
 
 ```sh
-pip install ns3-sort-bench[ibl]
+pip install -e '.[ibl]'
 python -c "from one.api import ONE; ONE.setup()"
 ```
 
@@ -155,14 +158,13 @@ Installed from git via the `[fiber-kit]` extra.  The lockfile pins the
 exact SHA validated by the smoke tests; override with:
 
 ```sh
-pip install 'ns3-sort-bench[fiber-kit] @ \
-    git+https://github.com/Gravios/fiber-kit.git@<branch-or-sha>'
+pip install 'fiber-kit @ git+https://github.com/Gravios/fiber-kit.git@<branch-or-sha>'
 ```
 
 ## Minimum install for the Pröpper simulator + BOTM reference
 
 ```sh
-pip install ns3-sort-bench
+pip install -e .
 ```
 
 Core deps only; no torch, no GPU, no git clones.  Enough to run every

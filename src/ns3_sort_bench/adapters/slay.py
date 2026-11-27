@@ -83,7 +83,7 @@ class SLAyAdapter(SorterAdapter):
             import slay
             v = getattr(slay, "__version__", "unknown")
         except ImportError as e:
-            return False, f"slay not installed (`pip install ns3-sort-bench[slay]`): {e}", ""
+            return False, f"slay not installed (Python 3.11 only: `pip install -e '.[slay]'` in the ns3-sort-bench checkout, in a 3.11 env): {e}", ""
         ks = adapter_registry.get("kilosort4")
         if ks is None:
             return False, "requires kilosort4 adapter", v

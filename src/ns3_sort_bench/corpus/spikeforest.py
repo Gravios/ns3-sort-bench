@@ -27,7 +27,7 @@ recording's raw bytes.  First call authenticates against kachery-cloud; later
 calls hit the local cache.  Set env `KACHERY_CLOUD_DIR` to control cache
 location.
 
-Install:   pip install ns3-sort-bench[spikeforest]
+Install:   pip install -e '.[spikeforest]'   (in the ns3-sort-bench checkout)
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _import_spikeforest():
     except ImportError as e:
         raise ImportError(
             "The spikeforest package is required.  Install with\n"
-            "    pip install 'ns3-sort-bench[spikeforest]'\n"
+            "    pip install -e '.[spikeforest]'\n"
             "(upstream: https://github.com/flatironinstitute/spikeforest)"
         ) from e
     try:
@@ -80,7 +80,7 @@ def _import_spikeforest():
     except ImportError as e:
         raise ImportError(
             "kachery_cloud is required by spikeforest.  Install with\n"
-            "    pip install 'ns3-sort-bench[spikeforest]'"
+            "    pip install -e '.[spikeforest]'"
         ) from e
     return sf
 

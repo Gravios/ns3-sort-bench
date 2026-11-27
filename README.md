@@ -21,16 +21,21 @@ Target sorters:
 
 ## Install
 
+Not on PyPI: clone the repository and install from the checkout.  Keep
+the quotes round an extra; zsh reads `[...]` as a glob otherwise.
+
 ```sh
-pip install ns3-sort-bench                         # core (BOTM reference + simulator)
-pip install ns3-sort-bench[fiber-kit]              # + the fiber-kit chain + lattice
-pip install ns3-sort-bench[kilosort4]              # + Kilosort 4 (GPU recommended)
-pip install ns3-sort-bench[dartsort]               # + DARTsort (GPU required)
-pip install ns3-sort-bench[slay]                   # + SLAy (post-pass on KS4)
-pip install ns3-sort-bench[mountainsort5,tridesclous2]  # + SI-wrapped sorters
-pip install ns3-sort-bench[spikeforest]            # + SpikeForest corpus
-pip install ns3-sort-bench[ibl]                    # + IBL ONE API corpus
-pip install ns3-sort-bench[all-cpu]                # everything CPU-only
+git clone https://github.com/Gravios/ns3-sort-bench.git && cd ns3-sort-bench
+pip install -e .                                  # core (BOTM reference + simulator)
+pip install -e '.[fiber-kit]'                     # + the fiber-kit chain + lattice
+pip install -e '.[kilosort4]'                     # + Kilosort 4 (GPU recommended)
+pip install -e '.[dartsort]'                      # + DARTsort (GPU required)
+pip install -e '.[slay]'                          # + SLAy (post-pass on KS4; Python 3.11 only)
+pip install -e '.[mountainsort5,tridesclous2]'    # + SI-wrapped sorters
+pip install -e '.[spykingcircus2]'                # + SpykingCircus 2 (built into SpikeInterface)
+pip install -e '.[spikeforest]'                   # + SpikeForest corpus
+pip install -e '.[ibl]'                           # + IBL ONE API corpus
+pip install -e '.[all-cpu]'                       # everything CPU-only
 ```
 
 ## Dependencies
