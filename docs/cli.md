@@ -97,7 +97,19 @@ ns3sb run --corpus paired_kampff:<item> --adapters fiber_kit,botm_ref
 
 # quiet mode (no per-step progress)
 ns3sb run --quiet
+
+# resume: re-run into the same --out, skipping what already sorted
+ns3sb run --out runs/0312-g8 --adapters fiber_kit,kilosort4,dartsort --skip-done
 ```
+
+`scores.csv` and `sort_summaries.json` are rewritten after every adapter, so
+a crash or a kill keeps what finished.  With `--skip-done`, an
+(item, adapter) pair that sorted without error in `--out` is not sorted again:
+its earlier scores (fiber_kit's `@fc_*` stages included) are kept.  Failed and
+new pairs are sorted.  Results for adapters left out of this run's
+`--adapters` stay in the files too.  A kept score is the one computed back
+then, so after a scorer fix re-run without `--skip-done`.  With
+`--export-klusters`, only the pairs sorted this time are exported.
 
 Flag precedence: CLI flags > plan > defaults.  CLI flags never mutate
 the plan — add to the plan with `load` / `set` for persistence.

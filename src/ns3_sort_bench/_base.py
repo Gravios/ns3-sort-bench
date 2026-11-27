@@ -217,6 +217,19 @@ def _as_dict(obj):
     return {k: getattr(obj, k) for k in obj.__dataclass_fields__}
 
 
+def _adapter_family(name: str) -> str:
+    """``fiber_kit@fc_session`` → ``fiber_kit``; plain names unchanged."""
+    return str(name).split("@", 1)[0]
+
+
+def _write_outputs(pd, output_dir, rows, sort_summaries):
+    df = pd.DataFrame(rows)
+    df.to_csv(os.path.join(output_dir, "scores.csv"), index=False)
+    with open(os.path.join(output_dir, "sort_summaries.json"), "w") as f:
+        json.dump(sort_summaries, f, indent=2, default=str)
+    return df
+
+
 # ─── BenchmarkRun ───────────────────────────────────────────────────────────
 @dataclass
 class BenchmarkRun:
@@ -245,6 +258,12 @@ class BenchmarkRun:
     # `ns3_sort_bench.klusters_export.export_klusters_session`.  Requires
     # neurosuite-3's `ndm_extractspikes` and `ndm_pca` on PATH.
     export_klusters: bool = False
+    # When true, an (item, adapter) pair that already has a successful
+    # sort in <output_dir>/sort_summaries.json is not sorted again: its
+    # earlier rows in scores.csv and its summaries (stage results
+    # included) are carried into this run's output.  Failed pairs are
+    # retried.  Wired from `ns3sb run --skip-done`.
+    skip_done: bool = False
 
     def add_corpus(self, c: Corpus) -> "BenchmarkRun":
         self.corpora.append(c); return self
@@ -259,6 +278,44 @@ class BenchmarkRun:
         if self.verbose:
             print(f"[ns3-sort-bench] {msg}", flush=True)
 
+    def _carry_over_prior(self, pd):
+        """Rows and summaries from an earlier run in output_dir to keep.
+
+        Returns ``(rows, summaries, done)``.  ``done`` holds the
+        (item, adapter) pairs of this run's grid that already sorted
+        without error; they are skipped.  Everything else from the
+        earlier run is kept too (other items, other adapters), except
+        the pairs this run sorts again, whose old rows would otherwise
+        be duplicated.
+        """
+        summ_path = os.path.join(self.output_dir, "sort_summaries.json")
+        scores_path = os.path.join(self.output_dir, "scores.csv")
+        if not os.path.exists(summ_path):
+            return [], [], set()
+        with open(summ_path) as f:
+            prior_summaries = json.load(f)
+        prior_rows: List[dict] = []
+        if os.path.exists(scores_path) and os.path.getsize(scores_path) > 1:
+            # keep_default_na=False: an item or adapter named "None"
+            # must not come back as NaN (see the corpus_item note in go()).
+            prior_rows = pd.read_csv(
+                scores_path, keep_default_na=False).to_dict("records")
+
+        grid = {(c.name, a.name) for c in self.corpora for a in self.adapters}
+        done = {(s.get("corpus_item"), s.get("adapter"))
+                for s in prior_summaries
+                if "error" not in s and "@" not in str(s.get("adapter", ""))}
+        done &= grid
+        rerun = grid - done
+
+        summaries = [s for s in prior_summaries
+                     if (s.get("corpus_item"),
+                         _adapter_family(s.get("adapter", ""))) not in rerun]
+        rows = [r for r in prior_rows
+                if (r.get("corpus_item"),
+                    _adapter_family(r.get("candidate_adapter", ""))) not in rerun]
+        return rows, summaries, done
+
     def go(self):
         try:
             import pandas as pd
@@ -268,6 +325,14 @@ class BenchmarkRun:
         os.makedirs(self.output_dir, exist_ok=True)
         rows: List[dict] = []
         sort_summaries: List[dict] = []
+        done: set = set()
+        if self.skip_done:
+            rows, sort_summaries, done = self._carry_over_prior(pd)
+
+        def checkpoint():
+            # Written after every adapter, so a crash or a kill part-way
+            # through keeps what finished, and --skip-done can resume.
+            _write_outputs(pd, self.output_dir, rows, sort_summaries)
 
         for corpus in self.corpora:
             self._log(f"corpus: {corpus.name} ({corpus.kind})")
@@ -289,6 +354,10 @@ class BenchmarkRun:
                               f"{type(e).__name__}: {e}")
 
             for adapter in self.adapters:
+                if (corpus.name, adapter.name) in done:
+                    self._log(f"  skipping {adapter.name}: already ran "
+                              f"(scores kept from {self.output_dir})")
+                    continue
                 ok, reason = adapter.available()
                 if not ok:
                     self._log(f"  skipping {adapter.name}: {reason}")
@@ -336,6 +405,7 @@ class BenchmarkRun:
                         error=f"{type(e).__name__}: {e}",
                         traceback=traceback.format_exc(limit=8),
                     ))
+                    checkpoint()
                     continue
 
                 sort_summaries.append(candidate.to_meta())
@@ -386,6 +456,7 @@ class BenchmarkRun:
                             self._log(f"    stage {stage_tag} scorer "
                                       f"{scorer.name} FAILED: "
                                       f"{type(e).__name__}: {e}")
+                checkpoint()
 
             # End of adapter loop for THIS corpus.  Write per-adapter Klusters
             # sessions (via neurosuite-3's ndm_* binaries) when requested.
@@ -403,9 +474,6 @@ class BenchmarkRun:
                 except Exception as e:
                     self._log(f"  klusters export FAILED: {type(e).__name__}: {e}")
 
-        df = pd.DataFrame(rows)
-        df.to_csv(os.path.join(self.output_dir, "scores.csv"), index=False)
-        with open(os.path.join(self.output_dir, "sort_summaries.json"), "w") as f:
-            json.dump(sort_summaries, f, indent=2, default=str)
+        df = _write_outputs(pd, self.output_dir, rows, sort_summaries)
         self._log(f"wrote {os.path.join(self.output_dir, 'scores.csv')} ({len(rows)} rows)")
         return df

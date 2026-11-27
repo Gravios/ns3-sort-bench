@@ -67,6 +67,7 @@ def cmd_run(args) -> int:
         print(f"scorers          : {scorer_names}")
         print(f"keep_fk_artifacts: {keep_fk_artifacts}")
         print(f"export_klusters  : {export_klusters}")
+        print(f"skip_done        : {args.skip_done}")
         if plan.ns3_yaml:    print(f"ns3_yaml         : {plan.ns3_yaml}")
         if plan.delta_frames: print(f"delta_frames     : {plan.delta_frames}")
         return 0
@@ -89,7 +90,8 @@ def cmd_run(args) -> int:
 
     bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
                           adapter_kwargs=adapter_kwargs,
-                          export_klusters=export_klusters)
+                          export_klusters=export_klusters,
+                          skip_done=args.skip_done)
 
     from ...runners.sorter_grid import expand_corpus_key
     for key in corpus_keys:
@@ -154,6 +156,10 @@ def register(subparsers) -> None:
     ap.add_argument("--fk-method", default="",
                     help="method token fiber_kit sorts a lab session in (default: the "
                          "session's own stderiv .spk token, e.g. stderiv_C5)")
+    ap.add_argument("--skip-done", action="store_true",
+                    help="don't re-sort an (item, adapter) pair that already sorted "
+                         "without error in --out; keep its earlier scores and retry "
+                         "only the failed or new pairs")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the resolved plan and exit without running")
     ap.add_argument("--quiet", action="store_true",
