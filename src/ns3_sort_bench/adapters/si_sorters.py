@@ -9,6 +9,7 @@ time via :func:`configs.load_adapter_config`.  Call-time overrides via
 """
 from __future__ import annotations
 
+import os
 import tempfile
 from typing import Any, Mapping, Optional
 
@@ -21,6 +22,22 @@ from ..configs import load_adapter_config
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
+
+
+def sortable_recording(recording, folder: str):
+    """The recording itself when SpikeInterface can hand it to a sorter,
+    else a binary copy of it saved under `folder`.
+
+    `run_sorter` dumps the recording to json or pickle before it sorts and
+    refuses one that is neither -- an in-memory NumpyRecording, which is
+    what the Propper simulator and other generated corpora give.  Saving
+    a copy costs a write of the traces; a recording read from files
+    (SpikeForest, a lab session) is passed through untouched.
+    """
+    if (recording.check_serializability("json")
+            or recording.check_serializability("pickle")):
+        return recording
+    return recording.save(folder=folder, format="binary", verbose=False)
 
 
 def _run_kwargs_from_config(name: str) -> dict:
@@ -103,9 +120,13 @@ class _SISorterBase(SorterAdapter):
 
         with tempfile.TemporaryDirectory(prefix=f"{self.name}_") as td:
             with measure_runtime() as rt:
+                # Two subfolders: run_sorter empties its own folder first.
                 sorting = run_sorter(
-                    sorter_name=self._si_name, recording=recording,
-                    folder=td, remove_existing_folder=True, verbose=False,
+                    sorter_name=self._si_name,
+                    recording=sortable_recording(
+                        recording, os.path.join(td, "recording")),
+                    folder=os.path.join(td, "sorter"),
+                    remove_existing_folder=True, verbose=False,
                     **run_kw,
                 )
             # Shift past Klusters' reserved IDs 0/1 (see

@@ -121,8 +121,14 @@ def _run_dartsort(recording, folder, **kwargs):
     run_kw = {**_DARTSORT_RUN_KWARGS, **kwargs.get("run_kwargs", {})}
     try:
         from spikeinterface.sorters import run_sorter
-        return run_sorter(sorter_name="dartsort", recording=recording,
-                           folder=folder, remove_existing_folder=True,
+        from .si_sorters import sortable_recording
+        # Two subfolders: run_sorter empties its own folder first.
+        import os
+        return run_sorter(sorter_name="dartsort",
+                           recording=sortable_recording(
+                               recording, os.path.join(folder, "recording")),
+                           folder=os.path.join(folder, "sorter"),
+                           remove_existing_folder=True,
                            verbose=False, **run_kw)
     except (ValueError, ImportError):
         import dartsort
