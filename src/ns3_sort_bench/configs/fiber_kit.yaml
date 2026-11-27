@@ -41,31 +41,37 @@ fiber_kit:
 
 
 # ============================================================================
-#  ns3-sort-bench baseline fiber-kit.yaml — fiber-kit 0.71.7's shipped
-#  fiber-kit-exp.yaml (Gravios/fiber-kit @ 7c6c35d, 2026-11-23), adapted for
-#  ns3sb's standard-method pipeline.  457 FK_* knobs.
+#  ns3-sort-bench baseline fiber-kit.yaml — fiber-kit 0.71.21's shipped
+#  fiber-kit-exp.yaml (Gravios/fiber-kit @ 0d62bc2, 2026-11-26), adapted for
+#  ns3sb's standard-method pipeline.  461 FK_* knobs.
 #
 #  ns3sb edits vs. the source yaml (grep for "[ns3sb:" to find them):
 #    FK_REALIGN_VARIANT              stderiv_C6_D34 -> ""  (resolve from .spk.standard)
 #    FK_SESSION_RESPLIT_RESIDUAL_THR 0.08 -> 0.15          (yaml's own standard-method hint)
 #    FK_CONSENSUS_RES_VARIANT        stderiv_S3     -> ""  (shared .res)
-#    pipeline:  the plan's BRANCH steps are commented out -- merge-resid,
-#               psame-resid (the residual-merge branch) and polish, rdr-polish
-#               (fiber-polish, whose island pass is most of its runtime).  They
-#               write side results (exp_rsm, exp_rsm_psame, fs_polish) that the
-#               harness does not read; uncomment to produce them.
+#    pipeline:  the collision plan in place of the profile's main line (which
+#               is kept, commented, under it):
+#                 fiber-flag-artifacts -> fiber-flag-collisions
+#                 -> fiber-session (flagged spikes out, as cluster 0)  fc_session
+#                 -> fiber-polish --realign-topch 2                    fc_polish
+#                 -> fiber-clean --junk residue                        fc_clean
+#                 -> fiber-xcorr-merge                                 fc_xcm
+#                 -> fiber-unmix (clusters 0 and 1 on the .fil)        fc_unmix
+#               No fiber-realign step: fiber-polish realigns each cluster in
+#               memory, and fiber-session's own end-of-run realign is
+#               FK_SESSION_REALIGN (auto here).
 #
-#  Everything else is verbatim from the source yaml, including the main line of
-#  the embedded `pipeline:` block that fiber-pipeline reads — so running
-#  `fiber-pipeline <g>` with this file as $FK_CONFIG executes:
-#    fiber-flag-artifacts -> fiber-session -> fiber-realign
-#    -> fiber-consensus(clean, quarantine-only) -> fiber-realign -> fiber-cpos
-#    -> fiber-psame-merge(per chunk) -> fiber-anchor-link -> fiber-realign
-#    -> fiber-xcorr-merge -> fiber-psame-merge -> fiber-realign -> fiber-rdr
-#  The final sort is `exp_psame`; the scoreable intermediates (each writes its
-#  own .clu) are fiber_session, fs_clean, fs_psc, exp_linked, exp_xcm.
+#  Everything else is verbatim from the source yaml.  The final sort is
+#  `fc_unmix`; the scoreable intermediates (each writes its own .clu) are
+#  fc_session, fc_polish, fc_clean, fc_xcm.
 #
-#  The file this replaces (ported from an earlier fiber-kit-exp.yaml, 325
+#  The 0.71.7 file this replaces ran the profile's main line (flag, session,
+#  consensus clean, cpos, per-chunk P(same), anchor-link, xcorr-merge, P(same),
+#  realigns, rdr) and ended in `exp_psame`; its knobs are all here unchanged,
+#  plus 0.71.9-0.71.19's FK_POLISH_REALIGN_TOPCH / _MAXLAG / _MIN and
+#  FK_POLISH_JOBS at the profile's values.
+#
+#  The file before that (ported from an earlier fiber-kit-exp.yaml, 325
 #  knobs) ended in `exp_final` (a fiber-consensus review of the anchor-link
 #  output) and held 13 fiber-session values that the shipped profile has since
 #  moved: ASSIGN_UNSORTED 1->0, CHUNK_MIN 9->18, COARSE_DR 0.2->0.09, DIP_DIM
@@ -273,23 +279,32 @@ fiber_kit:
 #  sheds to reserve; lowers the perfect-linker ceiling 0.49 -> 0.44), anchor-link, backbone-link after the
 #  merge (0.372 -> 0.353).
 pipeline:
-  - {stage: fiber-flag-artifacts, name: flag}
-  - {stage: fiber-session,        name: session,         out: fiber_session}
-  - {stage: fiber-realign,        name: realign-1,       in: fiber_session}
-  - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
-  - {stage: fiber-realign,        name: realign-2,       in: fs_clean}
-  - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
-  - {stage: fiber-psame-merge,    name: psame-chunk,     in: fs_clean, out: fs_psc, params: {per-chunk: 1}}   # section [F]
-  - {stage: fiber-anchor-link,    name: link,            in: fs_psc, out: exp_linked, params: {frag-layer: units}}
-  - {stage: fiber-realign,        name: realign-3,       in: exp_linked}
-  - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
-  # [ns3sb: branch off] - {stage: fiber-residual-merge, name: merge-resid,     in: exp_linked, out: exp_rsm}   # section [I]; a BRANCH: the reverse residual strip in fiber-xcorr-merge's place, from the same linker output
-  - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}   # section [F]
-  # [ns3sb: branch off] - {stage: fiber-psame-merge,    name: psame-resid,     in: exp_rsm, out: exp_rsm_psame}   # the branch's P(same): compare exp_rsm_psame with exp_psame
-  - {stage: fiber-realign,        name: realign-final,   in: exp_psame}
-  - {stage: fiber-rdr,            name: rdr,             in: exp_psame}    # QC table only: <SESS>.rdr.<method>.<group>.exp_psame.tsv
-  # [ns3sb: branch off] - {stage: fiber-polish,         name: polish,          in: fiber_session, out: fs_polish}   # section [H]; a BRANCH: compare fs_polish with exp_psame
-  # [ns3sb: branch off] - {stage: fiber-rdr,            name: rdr-polish,      in: fs_polish}
+  # [ns3sb: the plan is the collision pipeline, not this profile's main line (below, commented)]
+  - {stage: fiber-flag-artifacts,  name: flag}
+  - {stage: fiber-flag-collisions, name: flag-collisions}                                  # adds collisions (2) to the artifact mask; FK_SESSION_EXCLUDE=1 keeps them out of the sort as cluster 0
+  - {stage: fiber-session,         name: session, out: fc_session}
+  - {stage: fiber-polish,          name: polish,  in: fc_session,  out: fc_polish, params: {realign-topch: 2}}   # section [H]; each cluster realigned on its two largest channels
+  - {stage: fiber-clean,           name: clean,   in: fc_polish,   out: fc_clean,  params: {junk: residue}}      # core cut + quality value; the polish residue cluster goes to the noise whole
+  - {stage: fiber-xcorr-merge,     name: merge,   in: fc_clean,    out: fc_xcm}                                  # after the clean: xcorr-merge cannot leave a cluster out, so the residue would be a candidate on fc_polish
+  - {stage: fiber-unmix,           name: unmix,   in: fc_xcm,      out: fc_unmix}                                # explains clusters 0 and 1 on the .fil against the kept units
+  # the plan bundled up to fiber-kit 0.71.7 (this profile's main line):
+  # - {stage: fiber-flag-artifacts, name: flag}
+  # - {stage: fiber-session,        name: session,         out: fiber_session}
+  # - {stage: fiber-realign,        name: realign-1,       in: fiber_session}
+  # - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
+  # - {stage: fiber-realign,        name: realign-2,       in: fs_clean}
+  # - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
+  # - {stage: fiber-psame-merge,    name: psame-chunk,     in: fs_clean, out: fs_psc, params: {per-chunk: 1}}   # section [F]
+  # - {stage: fiber-anchor-link,    name: link,            in: fs_psc, out: exp_linked, params: {frag-layer: units}}
+  # - {stage: fiber-realign,        name: realign-3,       in: exp_linked}
+  # - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
+  # - {stage: fiber-residual-merge, name: merge-resid,     in: exp_linked, out: exp_rsm}   # section [I]; a BRANCH: the reverse residual strip in fiber-xcorr-merge's place, from the same linker output
+  # - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}   # section [F]
+  # - {stage: fiber-psame-merge,    name: psame-resid,     in: exp_rsm, out: exp_rsm_psame}   # the branch's P(same): compare exp_rsm_psame with exp_psame
+  # - {stage: fiber-realign,        name: realign-final,   in: exp_psame}
+  # - {stage: fiber-rdr,            name: rdr,             in: exp_psame}    # QC table only: <SESS>.rdr.<method>.<group>.exp_psame.tsv
+  # - {stage: fiber-polish,         name: polish,          in: fiber_session, out: fs_polish}   # section [H]; a BRANCH: compare fs_polish with exp_psame
+  # - {stage: fiber-rdr,            name: rdr-polish,      in: fs_polish}
   # without the per-chunk P(same) merge (the 0.58.3 plan): drop psame-chunk and
   # - {stage: fiber-anchor-link,    name: link,            in: fs_clean, out: exp_linked, params: {frag-layer: units}}
   # without the final P(same) merge:
@@ -1916,6 +1931,18 @@ FK_POLISH_MERGE_Q:       -1       # -1 | 0-0.05.  merge: the quality guard.  A u
 FK_POLISH_MERGE_Q_MAX:   0        # 0 | 0.1-0.5.  merge: the quality bound.  A union whose quality value exceeds this is
                                   #   refused, whatever its parts'.  0 = no bound.  0.2 moved purity by 0.2 pt on
                                   #   0312 g8 (measured in fiber_polish.py's header); no gain there.
+FK_POLISH_REALIGN_TOPCH: 0        # 0 | 1-3, or the channel count for all.  realign: > 0 = before every loop and every round
+                                  #   each cluster is realigned to its own median, only its N largest channels voting
+                                  #   (Klusters' Realign top-ch); the strip, the pool, the islands and the merge then read
+                                  #   the windows at that alignment.  0 = the stored alignment.  On two chunks of 0312 g8
+                                  #   (islands off) 2 was the best of off / 1 / 2 / all, by a small margin over all
+                                  #   (fiber_polish.py's header).
+FK_POLISH_REALIGN_MAXLAG: 3       # 3 | 1-6.  realign: furthest a spike is moved from its stored position (samples).
+FK_POLISH_REALIGN_MIN:   20       # 20.  realign: smallest cluster that is realigned; smaller ones stay as stored.
+FK_POLISH_JOBS:          1        # 1 | 0 or 2-N (processes).  Worker processes for the island pass: each cluster's kd leaves, t-SNE runs and
+                                  #   co-neighbour communities (95% of the pass, 81% of the stage on the 0312 g8 test) run in a worker;
+                                  #   0 = one per core.  The labels are the same with any count: a cluster's random subsets come from a
+                                  #   generator seeded by its id.  Workers are spawned (~1.5 s each) and run one BLAS thread.
 FK_POLISH_COS:           0.5      # 0.5.  template cosine a pair needs to be a candidate (islands and merge).
 FK_POLISH_TPL_CAP:       1000     # 1000.  spikes per cluster used for a template and its tails.
 FK_POLISH_HYBRID_PCS:    3        # 3 | 1-3.  features: standard-basis components per channel in the raw block.  The stage's

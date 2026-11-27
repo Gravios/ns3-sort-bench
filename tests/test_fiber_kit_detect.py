@@ -611,7 +611,7 @@ def test_full_chain_final_tag_matches_link_output_stage():
     from ns3_sort_bench.adapters.fiber_kit import (
         _FiberKitBase, _stage_method_flags,
     )
-    # fiber_kit emits exp_psame from fiber-psame-merge (the embedded
+    # fiber_kit emits fc_unmix from fiber-unmix (the embedded
     # plan's last `out:`); its final tag has nothing to do with
     # fiber-link's output stage.  Keep this pin focused on the legacy
     # per-stage chain, which still drives fiber_kit_no_deconv.
@@ -648,9 +648,9 @@ def test_fiber_kit_mode_dispatches_through_fiber_pipeline():
         "fiber-kit's bash driver)."
     )
     final = _FiberKitBase._MODE_FINAL_TAG["fiber_kit"]
-    assert final == "exp_psame", (
+    assert final == "fc_unmix", (
         f"_MODE_FINAL_TAG['fiber_kit'] = {final!r}; the embedded plan's "
-        "last `out:` tag (from fiber-psame-merge) is 'exp_psame'."
+        "last `out:` tag (from fiber-unmix) is 'fc_unmix'."
     )
     # ... and it IS the last `out:` of the bundled plan, whatever that plan
     # becomes: a config update that changes the plan's end must move the
@@ -776,7 +776,7 @@ def test_fiber_kit_scoreable_stages_cover_the_plans_intermediates():
         the plan's last one (that's the primary readback, re-emitting it would
         duplicate the fiber_kit row);
       * preserve the plan's precision-increasing step order
-        (fiber_session → fs_clean → fs_psc → exp_linked → exp_xcm) so the scored rows read
+        (fc_session → fc_polish → fc_clean → fc_xcm) so the scored rows read
         naturally.
     """
     from ns3_sort_bench.adapters.fiber_kit import _FIBER_KIT_SCOREABLE_STAGES
@@ -847,17 +847,23 @@ def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
         "fiber-pipeline will fall back to the canonical plan instead."
     )
     stages = [step["stage"] for step in parsed["pipeline"]]
-    assert "fiber-flag-artifacts" in stages
-    assert "fiber-consensus"     in stages
-    assert "fiber-anchor-link"   in stages
-    assert "fiber-psame-merge"   in stages
-    # Final-output step (fiber-psame-merge) is still present, and its out
-    # tag is `exp_psame` — which _MODE_FINAL_TAG also pins.
-    out_tags = [step.get("out") for step in parsed["pipeline"]]
-    assert "exp_psame" in out_tags
-    # The ns3sb edit: the plan's branch steps are off (side results the
-    # harness does not read; fiber-polish's island pass dominates runtime).
-    assert "fiber-polish" not in stages and "fiber-residual-merge" not in stages
+    # The ns3sb edit: the collision plan, in order, in place of the
+    # profile's main line.
+    assert stages == ["fiber-flag-artifacts", "fiber-flag-collisions",
+                      "fiber-session", "fiber-polish", "fiber-clean",
+                      "fiber-xcorr-merge", "fiber-unmix"]
+    steps = {step["stage"]: step for step in parsed["pipeline"]}
+    assert steps["fiber-polish"]["params"] == {"realign-topch": 2}
+    assert steps["fiber-clean"]["params"] == {"junk": "residue"}
+    # Each step reads the one before it; the final out tag is `fc_unmix`
+    # — which _MODE_FINAL_TAG also pins.
+    chain = [(step.get("in"), step.get("out")) for step in parsed["pipeline"]
+             if step.get("out")]
+    assert [o for _, o in chain] == ["fc_session", "fc_polish", "fc_clean",
+                                     "fc_xcm", "fc_unmix"]
+    assert all(chain[i + 1][0] == chain[i][1] for i in range(len(chain) - 1))
+    # The flagged spikes stay out of the sort, so fiber-unmix sees them.
+    assert parsed["FK_SESSION_EXCLUDE"] == 1
     # Flat FK_* tuning is also present — spot-check one from the file.
     assert "FK_SESSION_CHUNK_MIN" in parsed
     # fiber-pipeline mode takes FK_SESSION_REALIGN from the full yaml

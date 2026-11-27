@@ -355,7 +355,7 @@ class BenchmarkRun:
                 # SortedResults for scoreable intermediate sort stages via
                 # `extras["stage_results"]` (dict of {stage_tag → SortedResult})
                 # — today fiber_kit does this for the embedded pipeline's
-                # fiber_session / fs_clean / fs_psc / exp_linked / exp_xcm
+                # fc_session / fc_polish / fc_clean / fc_xcm
                 # intermediates.  Each
                 # one scores like a distinct adapter with name
                 # "<adapter>@<stage_tag>", feeds into the same rows and

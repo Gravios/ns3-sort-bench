@@ -25,7 +25,7 @@ Invocation::
                    [--rerun] [--dry-run]
 
 Prints, per setting, cluster count / IoU / recall / precision at
-fiber_session and at the final stage, and writes ``DIR/sweep.csv``.
+fc_session (fiber-session's sort) and at the final stage, and writes ``DIR/sweep.csv``.
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ DEFAULT_SESSION_SWEEP: Dict[str, List[Any]] = {
     "FK_SESSION_DECONV":               [0],            # 1
 }
 
-_STAGES = (("fiber_session", "fiber_kit@fiber_session"),
+_STAGES = (("fc_session", "fiber_kit@fc_session"),
            ("final", "fiber_kit"))
 _METRICS = (("n", "n_cand_units"),
             ("iou", "best_unit_accuracy_mean"),
@@ -225,7 +225,7 @@ def register(sub) -> None:
     ap = sub.add_parser(
         "fk-sweep",
         help="run fiber_kit over a set of FK_* values and tabulate "
-             "fiber_session / final per_cell scores",
+             "fc_session / final per_cell scores",
     )
     ap.add_argument("--corpus", required=True,
                     help="one corpus item, as for `ns3sb run --corpus`")

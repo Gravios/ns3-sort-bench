@@ -230,8 +230,8 @@ def cmd_summary(args) -> int:
         columns="metric",
         aggfunc="first",
         sort=False,       # keep scores.csv row order so pipeline stages
-                          # render in plan order (fiber_session →
-                          # fs_clean → fs_psc → exp_linked → exp_xcm),
+                          # render in plan order (fc_session →
+                          # fc_polish → fc_clean → fc_xcm),
                           # not alphabetical.
     )
     # Pivot with sort=False keeps candidate_adapter order, but the
@@ -278,7 +278,7 @@ def _split_stage_adapters(adapter_names: Sequence[str]
 
     A stage row's name is ``"<primary>@<stage_tag>"`` (today: emitted by
     the fiber_kit adapter — fiber_kit@fiber_session, fiber_kit@fs_clean,
-    fiber_kit@exp_xcm).  Primaries keep their input order; per-primary
+    fiber_kit@fc_xcm).  Primaries keep their input order; per-primary
     stage lists also keep theirs, so a caller that sorted the input by
     plan discovery order gets plan order out.
 
@@ -342,7 +342,7 @@ def _print_org(piv, *, decimals: int) -> None:
         # stage rows get one; if neither the primary nor its stages got
         # filtered out, we include a trailing `<primary>@exp_final`-equivalent
         # row — the primary row itself — so the reader sees the whole chain
-        # (fiber_session → fs_clean → ... → exp_xcm → <primary>) in one block.
+        # (fc_session → fc_polish → ... → fc_xcm → <primary>) in one block.
         for primary in primaries:
             stage_names = stages_by_primary.get(primary)
             if not stage_names:
@@ -350,7 +350,7 @@ def _print_org(piv, *, decimals: int) -> None:
             print()
             print(f"## {primary} stages")
             # Split pipeline-intermediate stages (fiber_session, fs_clean,
-            # exp_xcm, ...) from any post-hoc stages (today: `@curated`
+            # fc_xcm, ...) from any post-hoc stages (today: `@curated`
             # from `ns3sb score-curated`).  Pipeline stages render in
             # arrival order, then `final` (the primary itself, which IS
             # the end-of-chain sort), then any curated-style rows AFTER
@@ -368,7 +368,7 @@ def _print_org(piv, *, decimals: int) -> None:
                     cells.append(_fmt_cell(row.get(m), decimals, _is_count_metric(m)))
                 stage_rows.append(cells)
             # End-of-chain row: the primary itself, labelled with its
-            # mode-final tag (today: fiber_kit → exp_psame).  The label
+            # mode-final tag (today: fiber_kit → fc_unmix).  The label
             # "final" is clear enough given the section heading.
             row = sub.loc[primary]
             cells = ["final"]
@@ -388,7 +388,7 @@ def _print_org(piv, *, decimals: int) -> None:
             print(_org_table(headers_stages, stage_rows, numeric_mask))
 
         # Orphan stage groups: stage rows whose primary isn't in this
-        # slice (e.g. --adapter fiber_kit@exp_xcm alone).  Still render
+        # slice (e.g. --adapter fiber_kit@fc_xcm alone).  Still render
         # them so the filter doesn't silently drop rows.
         for primary, stage_names in stages_by_primary.items():
             if primary in primaries or not stage_names:

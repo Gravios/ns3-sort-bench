@@ -30,7 +30,7 @@ def test_tuning_text_merges_base_under_setting():
 
 def _fake_scores(path, n_fs, rec_fs, n_fin, rec_fin):
     rows = []
-    for adapter, n, rec in (("fiber_kit@fiber_session", n_fs, rec_fs),
+    for adapter, n, rec in (("fiber_kit@fc_session", n_fs, rec_fs),
                             ("fiber_kit", n_fin, rec_fin)):
         for metric, v in (("n_cand_units", n), ("best_unit_recall_mean", rec),
                           ("best_unit_accuracy_mean", rec / 2),
@@ -69,7 +69,7 @@ def test_run_tabulates_and_resumes(tmp_path, monkeypatch):
     assert "SESSION_DIPSPLIT=0" in text and "baseline" in text
     rows = list(csv.reader(open(tmp_path / "sw" / "sweep.csv")))
     by = {r[0]: r for r in rows[1:]}
-    assert by["SESSION_DIPSPLIT=0"][1] == "4"     # fiber_session n
+    assert by["SESSION_DIPSPLIT=0"][1] == "4"     # fc_session n
     assert by["baseline"][1] == "16"
     assert by["baseline"][5] == "14"              # final n (pairwise row ignored)
 
