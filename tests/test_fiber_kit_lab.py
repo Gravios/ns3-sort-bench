@@ -131,3 +131,27 @@ def test_lab_sort_runs_in_the_scratch_copy_and_reads_back_there(tmp_path, monkey
     assert set(res.extras["stage_results"]) == {"fc_session", "fc_polish", "fc_clean", "fc_xcm"}
     # nothing was written beside the lab session
     assert _listing(lab) == before
+
+
+def test_relative_artifacts_dir_still_runs_the_embedded_plan(tmp_path, monkeypatch):
+    """--out runs/x --keep-fk-artifacts gives a RELATIVE fk_artifacts_dir.
+    fiber-pipeline changes into the session folder before it opens
+    $FK_CONFIG, so a relative path there found no config and the runner fell
+    back to its built-in default chain (fiber-session -> refine -> ...)."""
+    import shutil
+    if shutil.which("fiber-pipeline") is None:
+        pytest.skip("fiber-pipeline not on PATH")
+    from spikeinterface.core import NumpyRecording
+    lab = tmp_path / "lab"
+    b = _make_session(lab)
+    monkeypatch.chdir(tmp_path)
+    rec = NumpyRecording([np.zeros((1000, 2), np.float32)], sampling_frequency=SR)
+    rec.annotate(session_base=b, electrode_group=G)
+    monkeypatch.setattr(fk._Full, "_available", True, raising=False)
+    with pytest.raises(FileNotFoundError):      # a dry run writes no fc_unmix to read back
+        fk._Full().sort(rec, fk_artifacts_dir="runs/x/fiber_kit", corpus_name="rat_g8",
+                        extra_args=["--dry-run"])
+    log = (tmp_path / "runs/x/fiber_kit/rat_g8/rat.fiber-pipeline.log").read_text()
+    assert "running the primary plan embedded in /" in log
+    assert "fiber-flag-artifacts" in log and "--clu-stage fc_session" in log
+    assert "fiber-refine" not in log

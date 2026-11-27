@@ -1054,9 +1054,14 @@ class _FiberKitBase(SorterAdapter):
             # contents survive for post-hoc inspection — but it IS
             # emptied before the sort starts (see _fresh_artifacts_dir).
             slug = _slugify(str(kwargs.get("corpus_name") or "sort"))
-            tmp_dir = _fresh_artifacts_dir(fk_artifacts_dir, slug)
+            tmp_dir = _fresh_artifacts_dir(os.path.abspath(fk_artifacts_dir), slug)
         else:
             tmp_dir = tempfile.mkdtemp(prefix="ns3sb_fk_")
+        # Absolute: fiber-pipeline changes into the session's folder before it
+        # opens $FK_CONFIG, so a path relative to the caller's folder (a
+        # relative --out with --keep-fk-artifacts) found no config there, and
+        # it ran its built-in default chain instead of the embedded plan.
+        tmp_dir = os.path.abspath(tmp_dir)
         method = _NS3_METHOD
         if not materialised:
             sess_base, staged = stage_lab_session(lab_base, group, tmp_dir)
@@ -1107,7 +1112,7 @@ class _FiberKitBase(SorterAdapter):
             tmp_dir,
             user_cfg_path=kwargs.get("fk_config_path"),
         )
-        env["FK_CONFIG"] = fk_config
+        env["FK_CONFIG"] = os.path.abspath(fk_config)
         fk_cfg_source, fk_cfg_origin = _resolve_user_fk_config(
             kwargs.get("fk_config_path"), quiet=True)
         fk_provenance.update(
