@@ -1,6 +1,7 @@
 """DARTsort adapter (Boussard, Varol, Paninski 2023+)."""
 from __future__ import annotations
 
+import math
 import tempfile
 from typing import Mapping
 import numpy as np
@@ -27,6 +28,64 @@ def _run_kwargs_from_config() -> dict:
 
 
 _DARTSORT_RUN_KWARGS = _run_kwargs_from_config()
+
+
+# DARTsortUserConfig defaults (0.5.31) for the window fields below; used
+# only when dartsort itself can't be imported to read them.
+_WINDOW_DEFAULTS = {
+    "ms_before": 1.4,
+    "ms_after": 2.6 + 0.1 / 3,
+    "feature_ms_before": 0.75,
+    "feature_ms_after": 1.25,
+    "alignment_ms": 1.5,
+}
+
+
+def _window_defaults() -> dict:
+    try:
+        from dartsort.config import DARTsortUserConfig
+        fields = DARTsortUserConfig.model_fields
+        return {k: float(fields[k].default) if k in fields else v
+                for k, v in _WINDOW_DEFAULTS.items()}
+    except Exception:
+        return dict(_WINDOW_DEFAULTS)
+
+
+def snap_windows_to_samples(run_kw: Mapping, fs: float) -> dict:
+    """Return *run_kw* with DARTsort's ms windows set to whole samples.
+
+    DARTsort rounds every ms value to samples on its own
+    (``floor(ms*fs/1000 + 0.5)``), separately for the trough offset, the
+    total length and each padded variant.  At rates where 1.4 ms is not
+    a whole number of samples those roundings disagree: at 32552 Hz the
+    base window is 131 samples but the realignment pad (alignment_ms
+    each side, trimmed by twice the trough shift) leaves 133, and
+    TemplateReduction then fails copying a 133-long TSVD mean into a
+    131-long buffer.  With every window an exact sample count the
+    roundings agree at any rate.  ``alignment_ms`` is snapped to an
+    even count because DARTsort halves it for the SVD alignment pad.
+    The total of ms_before + ms_after is kept odd, as DARTsort wants.
+    """
+    out = dict(run_kw)
+    base = _window_defaults()
+    base.update({k: float(v) for k, v in run_kw.items() if k in base})
+
+    def n(ms):
+        return math.floor(ms * fs / 1000.0 + 0.5)
+
+    def ms(samples):
+        return 1000.0 * samples / fs
+
+    for before, after in (("ms_before", "ms_after"),
+                          ("feature_ms_before", "feature_ms_after")):
+        nb = max(1, n(base[before]))
+        total = n(base[before] + base[after])
+        total = 2 * (total // 2) + 1  # DARTsort's odd rounding
+        na = max(1, total - nb)
+        out[before], out[after] = ms(nb), ms(na)
+    na = max(2, 2 * round(base["alignment_ms"] * fs / 2000.0))
+    out["alignment_ms"] = ms(na)
+    return out
 
 
 CONTRACT = Contract(
@@ -119,6 +178,7 @@ def _run_dartsort(recording, folder, **kwargs):
     # run_kwargs; the caller WINS on key conflict, matching every
     # other adapter's config-overlay semantics.
     run_kw = {**_DARTSORT_RUN_KWARGS, **kwargs.get("run_kwargs", {})}
+    run_kw = snap_windows_to_samples(run_kw, recording.get_sampling_frequency())
     try:
         from spikeinterface.sorters import run_sorter
         from .si_sorters import sortable_recording
