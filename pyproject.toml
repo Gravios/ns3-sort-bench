@@ -126,14 +126,14 @@ dev = [
     "ruff>=0.6",
 ]
 
-# EVERYTHING pip-installable in one Python env.  SLAy is not in it yet:
-# requirements.lock wants the Gravios/SLAy fork's commit.  Resolves to
+# EVERYTHING pip-installable in one Python env, SLAy included (the Gravios/SLAy
+# fork; requirements.lock pins its commit).  Resolves to
 # ~148 packages, ~3 GB installed with the CUDA 13 wheels torch and
 # faiss pull in.  Verified cleanly on Python 3.13.18 / linux-x86_64 on
 # 2026-11-02.  Includes [test] so a full install can self-check with
 # `pytest tests/` out of the box.
 all = [
-    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spykingcircus2,kilosort4,dartsort,spikeforest,ibl,accel,test]",
+    "ns3-sort-bench[fiber-kit,mountainsort5,tridesclous2,spykingcircus2,kilosort4,dartsort,slay,spikeforest,ibl,accel,test]",
 ]
 
 [project.scripts]

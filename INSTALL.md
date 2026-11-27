@@ -15,7 +15,7 @@ pip install -e .
 # CPU-only sorter bundle (no torch, no CUDA wheels; ~400 MB)
 pip install -e '.[all-cpu]'
 
-# Everything except SLAy (~148 packages, ~3 GB with CUDA 13 wheels)
+# Everything, SLAy included (~150 packages, ~3 GB with CUDA 13 wheels)
 pip install -e '.[all]'
 
 # Developing the harness itself — [all] + ruff; same packages as [all]
@@ -87,33 +87,41 @@ subset of sorter extras — e.g. `pip install -e '.[fiber-kit,test]'`.
 SLAy comes from the [Gravios/SLAy](https://github.com/Gravios/SLAy) fork,
 which runs on Python 3.11-3.13 and SpikeInterface 0.105 (upstream pins
 Python 3.11 and does not import on 0.105).  It installs into the same
-environment as everything else; the extra brings Kilosort 4, which SLAy
-post-processes:
+environment as everything else and is part of `[all]`; the extra brings
+Kilosort 4, which SLAy post-processes:
 
 ```sh
 pip install -e '.[slay]'
 ```
 
-It is not yet in `[all]` or `requirements.lock`: the lock wants the fork's
-commit, which exists once the fork is on GitHub.
+`requirements.lock` pins the fork at `aec305d` (the eight Python 3.13 / fix
+patches on upstream 3895c3a).
 
 ## Lockfile reproducibility
 
-`requirements.lock` is the exact `uv pip compile` output from
-2026-11-02.  Install the pinned environment byte-for-byte:
+`requirements.lock` is the `uv pip compile` output of 2026-11-02, with
+fiber-kit and SLAy pinned to commits since.  Install the pinned environment
+byte-for-byte:
 
 ```sh
 pip install -r requirements.lock
 pip install -e .                        # install ns3-sort-bench itself
-pytest                                   # 11/11 should pass
+pytest                                   # the whole suite should pass
 ```
 
-Regenerate after a deliberate dep bump:
+Regenerate after a deliberate dep bump, keeping every other pin (the lock is
+read as the preference) and moving only the package named:
 
 ```sh
 uv pip compile --python-version 3.13 --extra all pyproject.toml \
-    --output-file requirements.lock
+    --output-file requirements.lock --no-sources --upgrade-package <name>
 ```
+
+`--no-sources` is needed since SLAy is in `[all]`: its `pyproject.toml` sends uv
+to the pytorch.org CUDA index for torch, which is not where this lock takes torch
+from (PyPI).  A git dependency is not held by the existing lock: uv moves
+`fiber-kit` and `slay` to their main unless they are pinned, e.g. with
+`--override <file>` holding `fiber-kit @ git+https://github.com/Gravios/fiber-kit.git@<sha>`.
 
 CI should fail any `pyproject.toml` change whose `requirements.lock`
 wasn't regenerated in the same commit — otherwise the lockfile silently
