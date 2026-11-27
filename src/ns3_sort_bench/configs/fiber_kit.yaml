@@ -57,12 +57,14 @@ fiber_kit:
 #                 -> fiber-clean --junk residue                        fc_clean
 #                 -> fiber-xcorr-merge                                 fc_xcm
 #                 -> fiber-unmix (clusters 0 and 1 on the .fil)        fc_unmix
+#                    --children 1: also fc_unmix_h, the hierarchical session
 #               No fiber-realign step: fiber-polish realigns each cluster in
 #               memory, and fiber-session's own end-of-run realign is
 #               FK_SESSION_REALIGN (auto here).
 #
 #  Everything else is verbatim from the source yaml.  The final sort is
-#  `fc_unmix`; the scoreable intermediates (each writes its own .clu) are
+#  `fc_unmix` (flat; fc_unmix_h is the same labels as a hierarchy, for
+#  curation, and is not scored); the scoreable intermediates (each writes its own .clu) are
 #  fc_session, fc_polish, fc_clean, fc_xcm.
 #
 #  The 0.71.7 file this replaces ran the profile's main line (flag, session,
@@ -286,7 +288,7 @@ pipeline:
   - {stage: fiber-polish,          name: polish,  in: fc_session,  out: fc_polish, params: {realign-topch: 2}}   # section [H]; each cluster realigned on its two largest channels
   - {stage: fiber-clean,           name: clean,   in: fc_polish,   out: fc_clean,  params: {junk: residue}}      # core cut + quality value; the polish residue cluster goes to the noise whole
   - {stage: fiber-xcorr-merge,     name: merge,   in: fc_clean,    out: fc_xcm}                                  # after the clean: xcorr-merge cannot leave a cluster out, so the residue would be a candidate on fc_polish
-  - {stage: fiber-unmix,           name: unmix,   in: fc_xcm,      out: fc_unmix}                                # explains clusters 0 and 1 on the .fil against the kept units
+  - {stage: fiber-unmix,           name: unmix,   in: fc_xcm,      out: fc_unmix,  params: {children: 1}}       # explains clusters 0 and 1 on the .fil against the kept units; also writes fc_unmix_h (.clu/.clc/.clp) for Klusters
   # the plan bundled up to fiber-kit 0.71.7 (this profile's main line):
   # - {stage: fiber-flag-artifacts, name: flag}
   # - {stage: fiber-session,        name: session,         out: fiber_session}

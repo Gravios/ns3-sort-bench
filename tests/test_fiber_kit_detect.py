@@ -855,6 +855,9 @@ def test_write_fk_config_pipeline_mode_carries_embedded_plan(tmp_path):
     steps = {step["stage"]: step for step in parsed["pipeline"]}
     assert steps["fiber-polish"]["params"] == {"realign-topch": 2}
     assert steps["fiber-clean"]["params"] == {"junk": "residue"}
+    # fiber-unmix also writes fc_unmix_h, the hierarchical session for
+    # Klusters; the flat fc_unmix stays the scored readback.
+    assert steps["fiber-unmix"]["params"] == {"children": 1}
     # Each step reads the one before it; the final out tag is `fc_unmix`
     # — which _MODE_FINAL_TAG also pins.
     chain = [(step.get("in"), step.get("out")) for step in parsed["pipeline"]
