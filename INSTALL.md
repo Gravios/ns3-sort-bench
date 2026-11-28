@@ -127,13 +127,28 @@ CI should fail any `pyproject.toml` change whose `requirements.lock`
 wasn't regenerated in the same commit — otherwise the lockfile silently
 drifts from what the ranges resolve to.
 
+## Using the GPU and the cores
+
+Check the GPU is seen by the torch the sorters will use:
+
+```sh
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+With it, Kilosort 4 and SLAy run on CUDA, DARTsort gets 4 GPU workers, and
+SpyKING CIRCUS 2's template matching runs on CUDA (torch engine).  Without
+it they fall back to the CPU.  `ns3sb run --n-jobs` (default one per
+physical core) sets the CPU worker processes; `ns3sb` caps
+`OPENBLAS_NUM_THREADS` at 32 unless you export it.  See
+[docs/cli.md → Cores and GPU](docs/cli.md#cores-and-gpu---n-jobs).
+
 ## Per-sorter install notes
 
 ### DARTsort (GPU, torch >= 2.2, Python >= 3.12)
 
 Upstream metadata takes care of both constraints.  CUDA 12+ wheels are
 pulled automatically.  Resource contract: `gpu_vram_mb >= 12288` —
-check with `ns3-sort-bench list-contracts | grep -A3 dartsort`.
+check with `ns3sb contract dartsort`.
 
 ### Kilosort 4
 

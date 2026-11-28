@@ -31,7 +31,7 @@ clear skip message instead of a mid-sort traceback.
 
 Each adapter's Contract is a module-level constant.  The full catalog is
 documented in `CONTRACTS.md` at the project root — regenerate that
-document with `ns3-sort-bench --dump-contracts > CONTRACTS.md`.
+document from `ns3sb contract <name> --format markdown` for each adapter.
 """
 from __future__ import annotations
 

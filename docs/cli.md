@@ -23,6 +23,10 @@ and forwards to the same `main()`.
 | `fk-sweep`   | run fiber_kit over a set of FK_* values; table of fc_session / final scores |
 | `summary`    | corpus × adapter × metric pivot for one scored run |
 | `compare`    | diff two scored runs (B − A); regressions and improvements separately |
+| `rescore`    | score a run's saved sorts against the reference as it is now (no sorting) |
+| `score-curated` | score curated Klusters exports of each sorter, with the curation effort |
+| `curate-diff` | spike reassignments and merges / splits between two `.clu` files |
+| `inspect-clu` | summarise one `.clu` (units, sizes, hierarchy) |
 | `lattice`    | fiber-kit lattice ablation (passes through to `runners.lattice`) |
 | `render`     | render a run directory as HTML dashboard |
 | `doctor`     | environment / adapter readiness check |
@@ -102,30 +106,68 @@ ns3sb run --quiet
 ns3sb run --out runs/0312-g8 --adapters fiber_kit,kilosort4,dartsort --skip-done
 ```
 
-`scores.csv` and `sort_summaries.json` are rewritten after every adapter, so
-a crash or a kill keeps what finished.  With `--skip-done`, an
-(item, adapter) pair that sorted without error in `--out` is not sorted again:
-its earlier scores (fiber_kit's `@fc_*` stages included) are kept.  Failed and
-new pairs are sorted.  Results for adapters left out of this run's
-`--adapters` stay in the files too.  A kept score is the one computed back
-then, so after a scorer fix re-run without `--skip-done`.
+### Resuming: `--skip-done`
 
-`--export-klusters` (off unless given, or set in the plan) writes each
-sorter's Klusters session to `<out>/klusters_<sorter>/<item>/` as soon as that
-sorter finishes, fiber_kit's stages to `klusters_fiber_kit_fc_*`, and the
-reference to `klusters_ground_truth`.  Every finished sort is also saved
-to `<out>/sorts/<item>/<sorter>.npz` (spike times and labels), so with both
-flags a skipped pair with no Klusters session yet is exported from its saved
-sort; only a pair from before sorts were saved is sorted again.  For a lab
-electrode group the shared `.fil` holds just that group's channels, copied
-from the session `.fil` with a yaml and probe of its own.
+`scores.csv` and `sort_summaries.json` are rewritten after every sorter, and
+every finished sort (fiber_kit's stages included) is saved to
+`<out>/sorts/<item>/<sorter>.npz`, so a crash or a kill keeps what finished.
+Re-run into the same `--out` with `--skip-done` and an (item, sorter) pair
+that sorted without error there is not sorted again: its earlier rows are
+kept.  Failed and new pairs are sorted.  Rows for sorters left out of this
+run's `--adapters` stay in the files.  A kept score is the one computed back
+then; to score again without sorting, use `ns3sb rescore` (below).
 
-`--n-jobs N` (default: one per physical core) sets SpikeInterface's worker
-processes for mountainsort5, spykingcircus2, kilosort4, dartsort and slay, and
-DARTsort's `n_jobs_cpu`.  With a CUDA GPU, SpyKING CIRCUS 2's template matching
-runs on it (torch engine, spawned workers) and DARTsort gets 4 GPU workers,
-unless their yaml sets `matching:` / `n_jobs_gpu`.  Kilosort 4 and SLAy use
-the GPU on their own.  fiber_kit keeps the `FK_*_JOBS` keys of its tuning yaml.
+To sort a finished pair again with other settings, give the run its own
+`--out` (or leave out `--skip-done`).
+
+### Klusters sessions: `--export-klusters`
+
+Off unless given (or set in the plan).  Each sorter's session is written to
+`<out>/klusters_<sorter>/<item>/` as soon as that sorter finishes,
+fiber_kit's stages to `klusters_fiber_kit_<stage>`, and the reference to
+`klusters_ground_truth`; open the `sim_session` files in Klusters or
+NDManager.  All of them link one shared `.fil` / `.dat` in
+`<out>/shared_sessions/<item>/`: for a lab electrode group that is just the
+group's channels, copied from the session `.fil` (already filtered, not
+filtered again) with a yaml and probe for that channel count.  With
+`--skip-done`, a skipped pair with no session yet is exported from its saved
+sort; only a pair from before sorts were saved is sorted again.
+
+### Cores and GPU: `--n-jobs`
+
+`--n-jobs N` (default: one per physical core; `-1` every CPU, `-2` all but
+one) sets SpikeInterface's worker processes for mountainsort5,
+spykingcircus2, kilosort4, dartsort and slay, and DARTsort's `n_jobs_cpu`.
+SpikeInterface's own default is one process.
+
+| sorter | CPU | GPU |
+|---|---|---|
+| kilosort4, slay | preprocessing / analyzer passes on `--n-jobs` | CUDA on its own |
+| dartsort | `n_jobs_cpu` = `--n-jobs` | 4 GPU workers (`n_jobs_gpu` in `configs/dartsort.yaml`) |
+| spykingcircus2 | every chunked step on `--n-jobs` | template matching on CUDA (torch engine, spawned workers) unless `configs/spykingcircus2.yaml` has a `matching:` |
+| mountainsort5 | filter / whiten / cache on `--n-jobs`; its clustering and classification are single-threaded | none |
+| fiber_kit | its own keys: `FK_SESSION_JOBS` / `FK_POLISH_JOBS` (0 = one per chunk / core in the bundled baseline), `FK_CONSENSUS_WORKERS`, `FK_MANIFOLD_JOBS` | `FIBER_KIT_GPU=1`, `FK_CONSENSUS_TSNE_BACKEND` |
+| botm_ref | single process | none |
+
+`ns3sb` sets `OPENBLAS_NUM_THREADS=min(32, CPUs)` before numpy loads unless
+you export it: on a 128-thread machine OpenBLAS otherwise runs out of its
+buffers inside Kilosort 4 ("too many memory regions", then a segfault).
+
+### What a run writes
+
+| path under `--out` | what |
+|---|---|
+| `scores.csv` | every score: `scorer, corpus_item, reference_adapter, candidate_adapter, metric, value` |
+| `sort_summaries.json` | per sorter: units, spikes, runtime, peak memory, or the error |
+| `sorts/<item>/<sorter>.npz` | each sort's spike times and labels (stages too) |
+| `corpora.json` | the corpus key of each item, for `rescore` |
+| `klusters_<sorter>/<item>/` | Klusters sessions (`--export-klusters`) |
+| `shared_sessions/<item>/` | the `.fil` / `.dat` / yaml / probe they share |
+| `fiber_kit/<item>/` | fiber-kit's scratch session, logs and merged `fiber-kit.yaml` (`--keep-fk-artifacts`) |
+| `rescore.json`, `scores.prev.csv` | after `ns3sb rescore` |
+
+Peak memory is the process-wide high-water mark, so a sorter that runs after
+a memory-hungry one reports that one's peak.
 
 Flag precedence: CLI flags > plan > defaults.  CLI flags never mutate
 the plan — add to the plan with `load` / `set` for persistence.
@@ -236,8 +278,8 @@ removed after the sort):
 
 The plan runs in the session's own method, read off its `.spk` the way
 fiber-pipeline does (`.spk.stderiv.<g>`, else the one `stderiv_*` token), and
-the readback is that method's `fc_unmix`.  The bundled tuning is the
-standard-method one, so give the session's own:
+is read back in that method.  The bundled tuning is the standard-method one,
+so give the session's own:
 
 ```sh
 ns3sb run --corpus lab:/data/0312/sirotaA-jg-000005-20120312.yaml:8:stderiv_C5:cur_pl \
@@ -246,10 +288,35 @@ ns3sb run --corpus lab:/data/0312/sirotaA-jg-000005-20120312.yaml:8:stderiv_C5:c
 # --fk-method stderiv_C5   when the session has more than one stderiv .spk
 ```
 
-A `--fk-config` with a `pipeline:` of its own replaces the bundled plan, and
-the readback follows it: the last step's `out:` is the fiber_kit result, every
-earlier `out:` a stage row, and fiber-unmix's hierarchical `<out>_h` a stage
-row too (e.g. `fiber_kit@fc_unmix_t2_h` for the 0312 `_t2` plan).
+The `--fk-config` keys are merged over the bundled baseline
+(`configs/fiber_kit.yaml`) and win; the merged file the stages ran with is
+`<out>/fiber_kit/<item>/fiber-kit.yaml` under `--keep-fk-artifacts`.  A
+`pipeline:` in it replaces the bundled plan, and the readback follows the
+plan that ran: the last step's `out:` is the fiber_kit result, every earlier
+`out:` a stage row, and fiber-unmix's hierarchical `<out>_h` a stage row too.
+For the bundled plan that is `fc_unmix` with `fc_session`, `fc_polish`,
+`fc_clean`, `fc_xcm`, `fc_unmix_h`; for the 0312 `_t2` plan `fc_unmix_t2` with
+`fc_session` ... `fc_xcm_t2`, `fc_unmix_t2_h`.
+
+### A reference that is still being curated
+
+The corpus key's `<variant>:<tag>` is read when the run starts.  While that
+`.clu` is being curated, score the saved sorts again after each session
+instead of sorting again:
+
+```sh
+ns3sb run --corpus lab:/data/0312/s.yaml:8:stderiv_C5:fc_unmix_t2_h \
+          --adapters fiber_kit,kilosort4,dartsort,mountainsort5,spykingcircus2,slay \
+          --scorers pairwise,per_cell --export-klusters --keep-fk-artifacts \
+          --fk-config /data/0312/fiber-kit.yaml --out runs/0312-g8
+# ... curate fc_unmix_t2_h in Klusters ...
+ns3sb rescore runs/0312-g8
+ns3sb summary runs/0312-g8
+```
+
+When the reference is itself a fiber-kit sort, the fiber_kit rows partly
+measure fiber-kit agreeing with itself; read them against the other sorters
+with that in mind.
 
 ## Dashboard
 

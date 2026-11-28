@@ -90,12 +90,13 @@ sort; violations produce a logged skip, not a mid-sort traceback.
 Browse all contracts:
 
 ```sh
-ns3-sort-bench list-contracts        # one-line summary each
-ns3-sort-bench dump-contracts > CONTRACTS.md    # full markdown catalog
+ns3sb list contracts                       # one-line summary each
+ns3sb contract fiber_kit --format markdown # one adapter in full
 ```
 
-See `CONTRACTS.md` for the current catalog.  It is REGENERATED from the
-adapter source files; edit `src/ns3_sort_bench/adapters/*.py` and re-dump.
+See `CONTRACTS.md` for a catalog.  It is generated from the adapter
+source files: edit `src/ns3_sort_bench/adapters/*.py` and regenerate it
+from `ns3sb contract <name> --format markdown` for each adapter.
 
 ## Quick start
 
@@ -114,16 +115,53 @@ df = bench.go()
 print(df.pivot_table("value", ["corpus_item", "metric"], "candidate_adapter"))
 ```
 
-CLI:
+CLI (`ns3sb`; full reference in [docs/cli.md](docs/cli.md)):
 
 ```sh
-ns3-sort-bench list-adapters
-ns3-sort-bench run --corpus propper_sim_tiny --out runs/first
-ns3-sort-bench lattice --corpus propper_sim_medium \
-    --rules omp,sic-b --banks integer --priors none \
-    --out runs/lattice-sicb-vs-omp
-ns3-bench-render runs/first runs/first/dashboard.md
+ns3sb doctor                                   # which sorters are ready here
+ns3sb list adapters --available-only
+ns3sb run --corpus propper_sim_tiny --adapters botm_ref,fiber_kit --out runs/first
+ns3sb summary runs/first                       # corpus x sorter x metric table
+ns3sb compare runs/first runs/second --only-regressed
+ns3sb render runs/first                        # HTML dashboard
 ```
+
+`ns3-sort-bench` is the same command under its old name.
+
+## Lab sessions
+
+A corpus key `lab:<session yaml>:<group>:<variant>:<tag>` sorts one
+electrode group and scores it against `<base>.clu.<variant>.<group>.<tag>`
+(a curated sort, or one being curated).  Nothing is written beside the
+session: fiber_kit sorts a scratch copy, the other sorters read the group's
+channels.
+
+```sh
+ns3sb run --corpus lab:/data/0312/s.yaml:8:stderiv_C5:fc_unmix_t2_h \
+          --adapters fiber_kit,kilosort4,dartsort,mountainsort5,spykingcircus2,slay \
+          --scorers pairwise,per_cell --export-klusters --keep-fk-artifacts \
+          --fk-config /data/0312/fiber-kit.yaml --out runs/0312-g8
+```
+
+- `--fk-config` is merged over the bundled fiber-kit baseline; a
+  `pipeline:` in it replaces the bundled plan, and every `out:` of the plan
+  that ran is scored (the last as `fiber_kit`, the others as
+  `fiber_kit@<stage>`, plus fiber-unmix's hierarchical `<out>_h`).
+- `--export-klusters` writes each sorter's Klusters session to
+  `<out>/klusters_<sorter>/<item>/` as it finishes.
+- `--skip-done` resumes a run: finished sorters are not sorted again.
+- `ns3sb rescore <out>` scores the saved sorts against the reference as it
+  is on disk now, after more curation, without sorting.
+
+## Cores and GPU
+
+`--n-jobs` (default one per physical core) sets SpikeInterface's worker
+processes for the SI-based sorters; with CUDA, SpyKING CIRCUS 2's template
+matching and DARTsort's GPU workers use the card, and Kilosort 4 and SLAy
+pick it up on their own.  fiber-kit's parallelism is its own `FK_*_JOBS`
+keys, at one worker per chunk / core for session and polish in the bundled
+baseline.  MountainSort 5's clustering is single-threaded.  Details:
+[docs/cli.md → Cores and GPU](docs/cli.md#cores-and-gpu---n-jobs).
 
 ## Writing a new adapter
 
