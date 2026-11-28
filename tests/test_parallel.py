@@ -1,13 +1,13 @@
 """SpikeInterface job kwargs are set for a sort and restored after it."""
 import pytest
 
-from ns3_sort_bench.parallel import available_cpus, resolve_n_jobs, si_job_kwargs
+from ns3_sort_bench.parallel import available_cpus, physical_cores, resolve_n_jobs, si_job_kwargs
 
 
 def test_resolve_n_jobs():
     c = available_cpus()
-    assert resolve_n_jobs(None) == c
-    assert resolve_n_jobs(0) == c
+    assert resolve_n_jobs(None) == physical_cores() <= c
+    assert resolve_n_jobs(0) == physical_cores()
     assert resolve_n_jobs(-1) == c
     assert resolve_n_jobs(-2) == max(1, c - 1)
     assert resolve_n_jobs(-10_000) == 1

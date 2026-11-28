@@ -164,7 +164,7 @@ def register(subparsers) -> None:
     ap.add_argument("--n-jobs", type=int, default=None,
                     help="SpikeInterface worker processes for mountainsort5, "
                          "spykingcircus2, kilosort4, dartsort and slay (default: "
-                         "every CPU available; -1 all, -2 all but one).  fiber_kit "
+                         "one per physical core; -1 all CPUs, -2 all but one).  fiber_kit "
                          "uses the FK_*_JOBS keys of its tuning yaml instead")
     ap.add_argument("--skip-done", action="store_true",
                     help="don't re-sort an (item, adapter) pair that already sorted "

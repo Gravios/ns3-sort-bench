@@ -120,7 +120,7 @@ sort; only a pair from before sorts were saved is sorted again.  For a lab
 electrode group the shared `.fil` holds just that group's channels, copied
 from the session `.fil` with a yaml and probe of its own.
 
-`--n-jobs N` (default: every CPU available) sets SpikeInterface's worker
+`--n-jobs N` (default: one per physical core) sets SpikeInterface's worker
 processes for mountainsort5, spykingcircus2, kilosort4, dartsort and slay, and
 DARTsort's `n_jobs_cpu`.  With a CUDA GPU, SpyKING CIRCUS 2's template matching
 runs on it (torch engine, spawned workers) and DARTsort gets 4 GPU workers,

@@ -31,12 +31,27 @@ def available_cpus() -> int:
         return max(1, os.cpu_count() or 1)
 
 
+def physical_cores() -> int:
+    """Physical cores among the available CPUs (SMT siblings not counted)."""
+    cpus = available_cpus()
+    try:
+        import psutil
+        phys = psutil.cpu_count(logical=False) or cpus
+        logical = psutil.cpu_count(logical=True) or cpus
+        return max(1, min(cpus, cpus * phys // logical))
+    except Exception:
+        return cpus
+
+
 def resolve_n_jobs(n_jobs: Optional[int]) -> int:
-    """None or 0 → every available CPU; negative → that many fewer + 1
-    (-1 = all, -2 = all but one), as joblib and SpikeInterface count."""
+    """None or 0 → one job per physical core (on a 64-core / 128-thread
+    machine, 64: the SMT sibling adds little to numeric work and doubles
+    the processes and their memory); negative → that many fewer + 1 of
+    the available CPUs (-1 = all, -2 = all but one), as joblib and
+    SpikeInterface count."""
     cpus = available_cpus()
     if n_jobs is None or int(n_jobs) == 0:
-        return cpus
+        return physical_cores()
     n = int(n_jobs)
     if n < 0:
         return max(1, cpus + 1 + n)
