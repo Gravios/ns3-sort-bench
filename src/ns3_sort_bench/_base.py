@@ -262,8 +262,9 @@ class BenchmarkRun:
     # sort in <output_dir>/sort_summaries.json is not sorted again: its
     # earlier rows in scores.csv and its summaries (stage results
     # included) are carried into this run's output.  Failed pairs are
-    # retried, and so is a finished pair with no Klusters session when
-    # export_klusters is on.  Wired from `ns3sb run --skip-done`.
+    # retried.  With export_klusters, a skipped pair with no Klusters
+    # session is exported from its saved sort (sorts/<item>/<adapter>.npz);
+    # one with neither is sorted again.  Wired from `ns3sb run --skip-done`.
     skip_done: bool = False
 
     def add_corpus(self, c: Corpus) -> "BenchmarkRun":
@@ -308,11 +309,14 @@ class BenchmarkRun:
                 if "error" not in s and "@" not in str(s.get("adapter", ""))}
         done &= grid
         if self.export_klusters:
-            # A sort that was never exported can't be exported now (the
-            # sort itself isn't saved), so sort it again.
+            # A finished pair with no Klusters session is exported from its
+            # saved sort (sorts/<item>/<adapter>.npz).  Only a pair with
+            # neither (from before sorts were saved) is sorted again.
             from .klusters_export import exported_session_exists
+            from .sort_store import sort_path
             done = {(item, name) for item, name in done
-                    if exported_session_exists(self.output_dir, item, name)}
+                    if exported_session_exists(self.output_dir, item, name)
+                    or os.path.exists(sort_path(self.output_dir, item, name))}
         rerun = grid - done
 
         summaries = [s for s in prior_summaries
@@ -322,6 +326,24 @@ class BenchmarkRun:
                 if (r.get("corpus_item"),
                     _adapter_family(r.get("candidate_adapter", ""))) not in rerun]
         return rows, summaries, done
+
+    def _export_saved(self, corpus, name, sort_summaries, export):
+        """Export a skipped pair's saved sorts that have no Klusters session."""
+        from .klusters_export import exported_session_exists
+        from .sort_store import load_sort
+        names = [s["adapter"] for s in sort_summaries
+                 if s.get("corpus_item") == corpus.name
+                 and _adapter_family(s.get("adapter", "")) == name]
+        names = [n for n in names
+                 if not exported_session_exists(self.output_dir, corpus.name, n)]
+        results = {}
+        for n in names:
+            r = load_sort(self.output_dir, corpus.name, n)
+            if r is not None:
+                results[n] = r
+        if results:
+            self._log(f"    exporting saved sorts: {', '.join(results)}")
+            export(list(results), results)
 
     def go(self):
         try:
@@ -361,10 +383,29 @@ class BenchmarkRun:
                     self._log(f"  shared preprocessing FAILED: "
                               f"{type(e).__name__}: {e}")
 
+            def export(names, results):
+                nonlocal gt_exported
+                try:
+                    from .klusters_export import export_klusters_session
+                    sess_dirs = export_klusters_session(
+                        self.output_dir, corpus,
+                        {n: results[n] for n in names},
+                        include_ground_truth=not gt_exported,
+                    )
+                    gt_exported = True
+                    for sd in sess_dirs:
+                        self._log(f"    klusters session: {sd}")
+                except Exception as e:
+                    self._log(f"    klusters export FAILED: "
+                              f"{type(e).__name__}: {e}")
+
             for adapter in self.adapters:
                 if (corpus.name, adapter.name) in done:
                     self._log(f"  skipping {adapter.name}: already ran "
                               f"(scores kept from {self.output_dir})")
+                    if self.export_klusters:
+                        self._export_saved(corpus, adapter.name,
+                                           sort_summaries, export)
                     continue
                 ok, reason = adapter.available()
                 if not ok:
@@ -464,27 +505,24 @@ class BenchmarkRun:
                             self._log(f"    stage {stage_tag} scorer "
                                       f"{scorer.name} FAILED: "
                                       f"{type(e).__name__}: {e}")
+                names = [adapter.name] + [f"{adapter.name}@{t}"
+                                          for t in stage_results]
+                # The sort itself, so --skip-done can export or rescore it
+                # later without sorting again.
+                from .sort_store import save_sort
+                for n in names:
+                    try:
+                        save_sort(self.output_dir, candidates_for_corpus[n])
+                    except Exception as e:
+                        self._log(f"    saving sort {n} FAILED: "
+                                  f"{type(e).__name__}: {e}")
                 checkpoint()
 
                 # Klusters sessions for this sorter (and its stages) right
                 # away, not after the last sorter: they show up as each
                 # sort finishes and survive a later crash.
                 if self.export_klusters:
-                    names = [adapter.name] + [f"{adapter.name}@{t}"
-                                              for t in stage_results]
-                    try:
-                        from .klusters_export import export_klusters_session
-                        sess_dirs = export_klusters_session(
-                            self.output_dir, corpus,
-                            {n: candidates_for_corpus[n] for n in names},
-                            include_ground_truth=not gt_exported,
-                        )
-                        gt_exported = True
-                        for sd in sess_dirs:
-                            self._log(f"    klusters session: {sd}")
-                    except Exception as e:
-                        self._log(f"    klusters export FAILED: "
-                                  f"{type(e).__name__}: {e}")
+                    export(names, candidates_for_corpus)
 
         df = _write_outputs(pd, self.output_dir, rows, sort_summaries)
         self._log(f"wrote {os.path.join(self.output_dir, 'scores.csv')} ({len(rows)} rows)")

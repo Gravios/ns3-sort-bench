@@ -173,19 +173,47 @@ def test_export_survives_a_crash_mid_run(tmp_path, monkeypatch):
     assert exported_session_exists(str(tmp_path), "item", "a")
 
 
-def test_skip_done_resorts_pairs_never_exported(tmp_path, monkeypatch):
+def test_skip_done_exports_saved_sorts_instead_of_resorting(tmp_path, monkeypatch):
     calls = _fake_export(monkeypatch)
-    # first run without export: sorted and scored, no Klusters sessions
-    _bench(tmp_path, [FakeAdapter("a"), FakeAdapter("b")], skip_done=False).go()
-    # resume with export on: both are sorted again, since a sort is not
-    # saved and only a fresh one can be exported
-    a2, b2 = FakeAdapter("a"), FakeAdapter("b")
+    # first run without export: sorted, scored and saved, no Klusters sessions
+    _bench(tmp_path, [FakeAdapter("a", stages=True), FakeAdapter("b")],
+           skip_done=False).go()
+    from ns3_sort_bench.sort_store import sort_path
+    assert os.path.exists(sort_path(str(tmp_path), "item", "a@s1"))
+    # resume with export on: nothing re-sorted, the saved sorts exported
+    a2, b2 = FakeAdapter("a", stages=True), FakeAdapter("b")
     _bench_k(tmp_path, [a2, b2], skip_done=True).go()
-    assert (a2.calls, b2.calls) == (1, 1)
-    assert calls == [["a", "ground_truth"], ["b"]]
-    assert _candidates(tmp_path) == ["a", "b"]
-    # and once exported, they are skipped
-    a3, b3 = FakeAdapter("a"), FakeAdapter("b")
-    _bench_k(tmp_path, [a3, b3], skip_done=True).go()
-    assert (a3.calls, b3.calls) == (0, 0)
-    assert _candidates(tmp_path) == ["a", "b"]
+    assert (a2.calls, b2.calls) == (0, 0)
+    assert calls == [["a", "a@s1", "ground_truth"], ["b"]]
+    assert _candidates(tmp_path) == ["a", "a@s1", "b"]
+    # and once exported, nothing more is exported either
+    _bench_k(tmp_path, [FakeAdapter("a"), FakeAdapter("b")], skip_done=True).go()
+    assert len(calls) == 2
+
+
+def test_skip_done_resorts_when_no_saved_sort(tmp_path, monkeypatch):
+    import shutil
+    calls = _fake_export(monkeypatch)
+    _bench(tmp_path, [FakeAdapter("a")], skip_done=False).go()
+    shutil.rmtree(tmp_path / "sorts")       # a run from before sorts were saved
+    a2 = FakeAdapter("a")
+    _bench_k(tmp_path, [a2], skip_done=True).go()
+    assert a2.calls == 1
+    assert calls == [["a", "ground_truth"]]
+
+
+def test_saved_sort_round_trip(tmp_path):
+    from ns3_sort_bench.sort_store import load_sort, save_sort
+    r = SortedResult(unit_ids=[5, 2, 9], spike_times={2: np.array([30, 10]),
+                     5: np.array([7]), 9: np.array([], np.int64)},
+                     sampling_rate=32552.0, adapter="x@fc_polish",
+                     corpus_item="lab_g8", adapter_version="1.2")
+    save_sort(str(tmp_path), r)
+    back = load_sort(str(tmp_path), "lab_g8", "x@fc_polish")
+    assert list(back.unit_ids) == [5, 2, 9]
+    assert back.spike_times[2].tolist() == [30, 10]
+    assert back.spike_times[5].tolist() == [7]
+    assert back.spike_times[9].tolist() == []
+    assert (back.sampling_rate, back.adapter, back.adapter_version) == \
+        (32552.0, "x@fc_polish", "1.2")
+    assert load_sort(str(tmp_path), "lab_g8", "missing") is None

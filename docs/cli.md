@@ -113,9 +113,12 @@ then, so after a scorer fix re-run without `--skip-done`.
 `--export-klusters` (off unless given, or set in the plan) writes each
 sorter's Klusters session to `<out>/klusters_<sorter>/<item>/` as soon as that
 sorter finishes, fiber_kit's stages to `klusters_fiber_kit_fc_*`, and the
-reference to `klusters_ground_truth`.  Sorts are not saved otherwise, so with
-both flags a finished pair that has no Klusters session yet is sorted again
-to make one.
+reference to `klusters_ground_truth`.  Every finished sort is also saved
+to `<out>/sorts/<item>/<sorter>.npz` (spike times and labels), so with both
+flags a skipped pair with no Klusters session yet is exported from its saved
+sort; only a pair from before sorts were saved is sorted again.  For a lab
+electrode group the shared `.fil` holds just that group's channels, copied
+from the session `.fil` with a yaml and probe of its own.
 
 `--n-jobs N` (default: every CPU available) sets SpikeInterface's worker
 processes for mountainsort5, spykingcircus2, kilosort4, dartsort and slay, and
