@@ -12,6 +12,7 @@ import sys
 
 from .._util import eprint, import_registries, split_csv
 from ..plan import Plan
+from ...parallel import resolve_n_jobs
 
 
 def cmd_run(args) -> int:
@@ -68,6 +69,7 @@ def cmd_run(args) -> int:
         print(f"keep_fk_artifacts: {keep_fk_artifacts}")
         print(f"export_klusters  : {export_klusters}")
         print(f"skip_done        : {args.skip_done}")
+        print(f"n_jobs           : {resolve_n_jobs(args.n_jobs)}")
         if plan.ns3_yaml:    print(f"ns3_yaml         : {plan.ns3_yaml}")
         if plan.delta_frames: print(f"delta_frames     : {plan.delta_frames}")
         return 0
@@ -87,6 +89,9 @@ def cmd_run(args) -> int:
         adapter_kwargs["fk_config_path"] = os.path.abspath(args.fk_config)
     if getattr(args, "fk_method", ""):
         adapter_kwargs["fk_method"] = args.fk_method
+    # SpikeInterface worker processes for the SI-based adapters
+    # (ns3_sort_bench.parallel); fiber-kit keeps its own FK_*_JOBS.
+    adapter_kwargs["n_jobs"] = resolve_n_jobs(args.n_jobs)
 
     bench = BenchmarkRun(output_dir=output_dir, verbose=not args.quiet,
                           adapter_kwargs=adapter_kwargs,
@@ -156,6 +161,11 @@ def register(subparsers) -> None:
     ap.add_argument("--fk-method", default="",
                     help="method token fiber_kit sorts a lab session in (default: the "
                          "session's own stderiv .spk token, e.g. stderiv_C5)")
+    ap.add_argument("--n-jobs", type=int, default=None,
+                    help="SpikeInterface worker processes for mountainsort5, "
+                         "spykingcircus2, kilosort4, dartsort and slay (default: "
+                         "every CPU available; -1 all, -2 all but one).  fiber_kit "
+                         "uses the FK_*_JOBS keys of its tuning yaml instead")
     ap.add_argument("--skip-done", action="store_true",
                     help="don't re-sort an (item, adapter) pair that already sorted "
                          "without error in --out; keep its earlier scores and retry "

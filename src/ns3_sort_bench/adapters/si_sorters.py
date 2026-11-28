@@ -19,6 +19,7 @@ from .._base import (
     SortedResult, si_sorting_to_spike_times, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
 from ..configs import load_adapter_config
+from ..parallel import cuda_available, si_job_kwargs
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
@@ -37,7 +38,10 @@ def sortable_recording(recording, folder: str):
     if (recording.check_serializability("json")
             or recording.check_serializability("pickle")):
         return recording
-    return recording.save(folder=folder, format="binary", verbose=False)
+    # n_jobs=1: an in-memory recording is pickled into every worker of a
+    # process pool, so N jobs would hold N copies of the traces.
+    return recording.save(folder=folder, format="binary", verbose=False,
+                          n_jobs=1)
 
 
 def _run_kwargs_from_config(name: str) -> dict:
@@ -111,14 +115,20 @@ class _SISorterBase(SorterAdapter):
 
     def available(self): return self._available, self._reason
 
+    def _device_kwargs(self, run_kw: dict) -> dict:
+        """Hook for a sorter whose GPU use has to be asked for."""
+        return run_kw
+
     def sort(self, recording, *, ns3_yaml=None, ground_truth_res=None,
              **kwargs) -> SortedResult:
         if not self._available:
             raise EnvironmentError(f"{self.name}: {self._reason}")
         from spikeinterface.sorters import run_sorter
         run_kw = {**self._run_kwargs, **kwargs.get("run_kwargs", {})}
+        run_kw = self._device_kwargs(run_kw)
 
-        with tempfile.TemporaryDirectory(prefix=f"{self.name}_") as td:
+        with tempfile.TemporaryDirectory(prefix=f"{self.name}_") as td, \
+                si_job_kwargs(kwargs.get("n_jobs")) as n_jobs:
             with measure_runtime() as rt:
                 # Two subfolders: run_sorter empties its own folder first.
                 sorting = run_sorter(
@@ -142,7 +152,7 @@ class _SISorterBase(SorterAdapter):
             channels=list(recording.get_channel_ids()),
             wall_time_s=rt["wall_time_s"], peak_rss_mb=rt["peak_rss_mb"],
             extras=dict(si_name=self._si_name, run_kwargs=run_kw,
-                        si_unit_id_map=id_map),
+                        si_unit_id_map=id_map, n_jobs=n_jobs),
         )
 
 
@@ -218,6 +228,31 @@ class SpykingCircus2Adapter(_SISorterBase):
     # use for this sorter.
     _si_internal = True
     _run_kwargs = _run_kwargs_from_config("spykingcircus2")
+
+    def _device_kwargs(self, run_kw: dict) -> dict:
+        """Template matching (circus-omp, the bulk of the sort) on CUDA.
+
+        SpikeInterface's default engine is numpy on the CPU.  With a GPU
+        and no `matching:` in configs/spykingcircus2.yaml, the torch
+        engine runs the convolutions on cuda.  Every job worker opens
+        its own CUDA context, and an earlier sorter in this process
+        (Kilosort 4, DARTsort) has usually initialised CUDA already,
+        which a forked worker can't inherit, so the workers are spawned.
+        Note the SpikeInterface 0.105 wrapper reads `matching_kwargs`,
+        not the `method_kwargs` its own default dict shows.
+        """
+        if "matching" in run_kw or not cuda_available():
+            return run_kw
+        out = dict(run_kw)
+        out["matching"] = {
+            "method": "circus-omp",
+            "matching_kwargs": {"engine": "torch", "torch_device": "cuda"},
+            "pipeline_kwargs": {},
+        }
+        job = dict(out.get("job_kwargs") or {})
+        job.setdefault("mp_context", "spawn")
+        out["job_kwargs"] = job
+        return out
     _contract = Contract(
         adapter_name="spykingcircus2",
         upstream_url="https://github.com/SpikeInterface/spikeinterface",

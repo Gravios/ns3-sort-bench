@@ -20,6 +20,7 @@ from .._base import (
     SortedResult, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
 from ..configs import load_adapter_config
+from ..parallel import si_job_kwargs
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
@@ -132,7 +133,11 @@ class SLAyAdapter(SorterAdapter):
         ks_kw = {**_SLAY_KS_DEFAULTS, **kwargs.get("ks_kwargs", {})}
         slay_kw = {**_SLAY_MERGE_DEFAULTS, **kwargs.get("slay_kwargs", {})}
         an_kw = {**_SLAY_ANALYZER_DEFAULTS, **kwargs.get("analyzer", {})}
-        with measure_runtime() as rt:
+        if "n_jobs" in kwargs:
+            ks_kw.setdefault("n_jobs", kwargs["n_jobs"])
+        # The analyzer's waveform / template / correlogram passes are
+        # SpikeInterface chunked jobs, so they take the global n_jobs.
+        with measure_runtime() as rt, si_job_kwargs(kwargs.get("n_jobs")):
             ks = adapter_registry["kilosort4"]
             ks_result = ks.sort(recording, **ks_kw)
             with tempfile.TemporaryDirectory(prefix="slay_") as td:

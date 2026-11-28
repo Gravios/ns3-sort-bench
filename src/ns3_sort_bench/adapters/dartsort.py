@@ -10,6 +10,7 @@ from .._base import (
     SortedResult, si_sorting_to_spike_times, SorterAdapter, _register, adapter_registry, measure_runtime,
 )
 from ..configs import load_adapter_config
+from ..parallel import cuda_available, resolve_n_jobs, si_job_kwargs
 from ..contracts import (
     Contract, RecordingReqs, OutputSchema, Capabilities, ResourceEstimates,
 )
@@ -154,7 +155,10 @@ class DARTsortAdapter(SorterAdapter):
         if not self._available:
             raise EnvironmentError(f"dartsort: {self._reason}")
 
-        with tempfile.TemporaryDirectory(prefix="dartsort_") as td:
+        # SI's job kwargs cover the wrapper's own chunked work; DARTsort's
+        # workers are its n_jobs_cpu / n_jobs_gpu (configs/dartsort.yaml).
+        with tempfile.TemporaryDirectory(prefix="dartsort_") as td, \
+                si_job_kwargs(kwargs.get("n_jobs")):
             with measure_runtime() as rt:
                 sorting = _run_dartsort(recording, td, **kwargs)
             # Shift past Klusters' reserved IDs 0/1 (see
@@ -173,12 +177,34 @@ class DARTsortAdapter(SorterAdapter):
         )
 
 
+# DARTsort's GPU workers when it finds a GPU and the yaml sets none.  On
+# one device they are threads sharing it (DARTsort only uses processes
+# for multi-GPU), so a few keep the card busy between host-side steps.
+_DEFAULT_GPU_JOBS = 4
+
+
+def dartsort_jobs(run_kw: Mapping, n_jobs) -> dict:
+    """Fill DARTsort's n_jobs_cpu / n_jobs_gpu unless the yaml set them.
+
+    Upstream defaults are 0 for both: everything on the main thread.
+    n_jobs_cpu takes the bench's --n-jobs; n_jobs_gpu is
+    _DEFAULT_GPU_JOBS when CUDA is there.  DARTsort uses only the one
+    that matches its device.
+    """
+    out = dict(run_kw)
+    out.setdefault("n_jobs_cpu", resolve_n_jobs(n_jobs))
+    if cuda_available():
+        out.setdefault("n_jobs_gpu", _DEFAULT_GPU_JOBS)
+    return out
+
+
 def _run_dartsort(recording, folder, **kwargs):
     # Merge configs/dartsort.yaml defaults with the caller's one-off
     # run_kwargs; the caller WINS on key conflict, matching every
     # other adapter's config-overlay semantics.
     run_kw = {**_DARTSORT_RUN_KWARGS, **kwargs.get("run_kwargs", {})}
     run_kw = snap_windows_to_samples(run_kw, recording.get_sampling_frequency())
+    run_kw = dartsort_jobs(run_kw, kwargs.get("n_jobs"))
     try:
         from spikeinterface.sorters import run_sorter
         from .si_sorters import sortable_recording

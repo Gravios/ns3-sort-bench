@@ -117,6 +117,13 @@ reference to `klusters_ground_truth`.  Sorts are not saved otherwise, so with
 both flags a finished pair that has no Klusters session yet is sorted again
 to make one.
 
+`--n-jobs N` (default: every CPU available) sets SpikeInterface's worker
+processes for mountainsort5, spykingcircus2, kilosort4, dartsort and slay, and
+DARTsort's `n_jobs_cpu`.  With a CUDA GPU, SpyKING CIRCUS 2's template matching
+runs on it (torch engine, spawned workers) and DARTsort gets 4 GPU workers,
+unless their yaml sets `matching:` / `n_jobs_gpu`.  Kilosort 4 and SLAy use
+the GPU on their own.  fiber_kit keeps the `FK_*_JOBS` keys of its tuning yaml.
+
 Flag precedence: CLI flags > plan > defaults.  CLI flags never mutate
 the plan — add to the plan with `load` / `set` for persistence.
 
