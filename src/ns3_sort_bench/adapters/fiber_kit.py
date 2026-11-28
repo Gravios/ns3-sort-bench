@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -507,6 +507,32 @@ _FK_PIPELINE_BASELINE = _fk_pipeline_cfg_baseline()
 # scored rows.
 _FIBER_KIT_SCOREABLE_STAGES = ("fc_session", "fc_polish", "fc_clean",
                                "fc_xcm")
+
+
+def plan_outputs(config_path: str) -> Optional[Tuple[str, List[str]]]:
+    """``(final, earlier)`` stage tags of the `pipeline:` in *config_path*.
+
+    The merged config is what fiber-pipeline ran, and a user tuning yaml
+    with a `pipeline:` of its own replaces the bundled plan (the 0312
+    fiber-kit-exp file writes fc_session, fc_polish_t2, fc_clean_t2,
+    fc_xcm_t2, fc_unmix_t2).  The readback follows it: *final* is the
+    last step's `out:`, *earlier* every other step's `out:` in plan
+    order.  None when there is no plan to read, and the fixed bundled
+    tags apply.
+    """
+    try:
+        import yaml as _yaml
+        with open(config_path) as f:
+            plan = (_yaml.safe_load(f) or {}).get("pipeline")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(plan, list):
+        return None
+    outs = [str(st["out"]) for st in plan
+            if isinstance(st, dict) and st.get("out")]
+    if not outs:
+        return None
+    return outs[-1], [o for o in outs[:-1] if o != outs[-1]]
 
 
 def _programs_yaml_section(overrides: Optional[Mapping[str, Mapping[str, str]]] = None
@@ -1173,7 +1199,11 @@ class _FiberKitBase(SorterAdapter):
         # Readback: the scratch session's own sort, in the method it ran in,
         # under the tag the mode's chain ends in (_MODE_FINAL_TAG).
         variant = kwargs.get("variant", method)
-        tag = kwargs.get("tag", self._MODE_FINAL_TAG[self._mode])
+        ran = plan_outputs(fk_config) if self._mode == "fiber_kit" else None
+        final_tag, stage_tags = (ran if ran else
+                                 (self._MODE_FINAL_TAG[self._mode],
+                                  list(_FIBER_KIT_SCOREABLE_STAGES)))
+        tag = kwargs.get("tag", final_tag)
         sort_ex = NS3SortingExtractor(
             sess_base + ".yaml", electrode_group=group,
             variant=variant, tag=tag,
@@ -1194,7 +1224,10 @@ class _FiberKitBase(SorterAdapter):
         # fiber_kit row.
         stage_results: Dict[str, "SortedResult"] = {}
         if self._mode == "fiber_kit":
-            for stage_tag in _FIBER_KIT_SCOREABLE_STAGES:
+            # fiber-unmix also writes the hierarchical <final>_h
+            # (.clu/.clc/.clp for Klusters); scored as a stage of its own,
+            # since that is the sort curation starts from.
+            for stage_tag in stage_tags + [f"{tag}_h"]:
                 stage_result = self._readback_stage_result(
                     sess_base, group, variant, stage_tag, recording,
                 )

@@ -155,3 +155,30 @@ def test_relative_artifacts_dir_still_runs_the_embedded_plan(tmp_path, monkeypat
     assert "running the primary plan embedded in /" in log
     assert "fiber-flag-artifacts" in log and "--clu-stage fc_session" in log
     assert "fiber-refine" not in log
+
+
+def test_readback_follows_a_user_plan(tmp_path, monkeypatch):
+    """A --fk-config with its own `pipeline:` (the 0312 _t2 plan) replaces the
+    bundled one, and the readback follows it: fc_unmix_t2 is the result, its
+    earlier outs and the hierarchical fc_unmix_t2_h are the stages."""
+    from spikeinterface.core import NumpyRecording
+    lab = tmp_path / "lab"
+    b = _make_session(lab)
+    user_cfg = os.path.join(os.path.dirname(__file__), "data", "fk_plan_t2_0312.yaml")
+
+    def fake_run_stage(self, stage, sess_base, group, *, env, extra_args, method):
+        clu = np.r_[3, np.where(np.arange(N) % 2, 2, 3)].astype("<i4")
+        for tag in ("fc_session", "fc_polish_t2", "fc_clean_t2", "fc_xcm_t2",
+                    "fc_unmix_t2", "fc_unmix_t2_h"):
+            clu.tofile(f"{sess_base}.clu.{method}.{group}.{tag}")
+
+    monkeypatch.setattr(fk._FiberKitBase, "_run_stage", fake_run_stage)
+    monkeypatch.setattr(fk._Full, "_available", True, raising=False)
+    rec = NumpyRecording([np.zeros((1000, 2), np.float32)], sampling_frequency=SR)
+    rec.annotate(session_base=b, electrode_group=G)
+    res = fk._Full().sort(rec, fk_artifacts_dir=str(tmp_path / "keep"),
+                          corpus_name="rat_g8", fk_config_path=user_cfg)
+    assert res.extras["tag"] == "fc_unmix_t2"
+    assert list(res.extras["stage_results"]) == [
+        "fc_session", "fc_polish_t2", "fc_clean_t2", "fc_xcm_t2", "fc_unmix_t2_h"]
+    assert res.extras["stage_results"]["fc_unmix_t2_h"].adapter == "fiber_kit@fc_unmix_t2_h"

@@ -1,0 +1,18 @@
+# The `pipeline:` of fiber-kit-exp-0312.yaml, the run that made
+# .clu.stderiv_C5.8.fc_unmix_t2_h on sirotaA-jg-000005-20120312.
+pipeline:
+  # The collision-flagged sort, polished with each cluster realigned on its two largest channels,
+  # cleaned, merged and unmixed (2026-11-25: plans 20 + 23 + 24 in one).  Needs fiber-kit 0.71.10
+  # (--realign-topch: 0.71.9; --junk residue: 0.71.10), <base>.fil, and FK_SESSION_EXCLUDE: 1 (set below).
+  # New names from the polish on (_t2): fc_polish, fc_clean, fc_unmix and fc_unmix_h are not touched.
+  # `session` writes fc_session again; to keep the one on disk start at the polish:
+  #     fiber-pipeline <group> --from polish-top2
+  - {stage: fiber-flag-artifacts,  name: flag}
+  - {stage: fiber-flag-collisions, name: flag-collisions}
+  - {stage: fiber-session,         name: session,         out: fc_session}
+  - {stage: fiber-polish,          name: polish-top2,     in: fc_session,   out: fc_polish_t2, params: {realign-topch: 2}}
+  - {stage: fiber-clean,           name: clean-top2,      in: fc_polish_t2, out: fc_clean_t2,  params: {junk: residue}}   # the residue cluster fiber-polish recorded
+  - {stage: fiber-xcorr-merge,     name: merge-top2,      in: fc_clean_t2,  out: fc_xcm_t2}    # after the clean: it cannot leave the residue cluster out
+  - {stage: fiber-unmix,           name: unmix-top2,      in: fc_xcm_t2,    out: fc_unmix_t2,  params: {one-as: units, children: 1}}   # also writes fc_unmix_t2_h
+
+
