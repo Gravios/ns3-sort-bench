@@ -11,6 +11,7 @@ from .commands import (
     list_cmd,
     misc_cmd,
     plan_cmd,
+    rescore_cmd,
     review_cmd,
     run_cmd,
     score_curated_cmd,
@@ -83,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
     fk_sweep_cmd.register(sub)
     # Review of previous runs
     review_cmd.register(sub)
+    rescore_cmd.register(sub)
     # Curation-effort diff (Klusters .clu + .cur comparison)
     curate_cmd.register(sub)
     score_curated_cmd.register(sub)

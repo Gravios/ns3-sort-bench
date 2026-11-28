@@ -3,13 +3,17 @@
 ``<output_dir>/sorts/<item>/<adapter>.npz`` holds one SortedResult's
 spike times and labels plus its bookkeeping (no templates, no extras).
 ``ns3sb run --skip-done`` reloads them for pairs it doesn't sort again,
-so a Klusters export asked for later, or a rescore, needs no re-sort.
+and ``ns3sb rescore`` scores them against the reference as it is now,
+so a Klusters export asked for later, or a moving curation, needs no
+re-sort.  ``corpora.json`` maps each item to the corpus key it came
+from, so the reference can be resolved again.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -48,8 +52,52 @@ def save_sort(output_dir: str, result) -> str:
 
 def load_sort(output_dir: str, corpus_item: str, adapter: str) -> Optional[object]:
     """The saved SortedResult, or None when there is none (or it's unreadable)."""
+    return load_sort_file(sort_path(output_dir, corpus_item, adapter))
+
+
+def saved_sorts(output_dir: str, corpus_item: str) -> List[object]:
+    """Every readable saved sort of *corpus_item*, in file-name order."""
+    d = os.path.dirname(sort_path(output_dir, corpus_item, "x"))
+    if not os.path.isdir(d):
+        return []
+    out = []
+    for f in sorted(os.listdir(d)):
+        if f.endswith(".npz") and not f.endswith(".tmp.npz"):
+            r = load_sort_file(os.path.join(d, f))
+            if r is not None:
+                out.append(r)
+    return out
+
+
+def corpora_path(output_dir: str) -> str:
+    return os.path.join(output_dir, "corpora.json")
+
+
+def record_corpora(output_dir: str, keys: Dict[str, str]) -> None:
+    """Merge {corpus_item: corpus key} into <output_dir>/corpora.json, so
+    `ns3sb rescore` can resolve each item's reference again."""
+    path = corpora_path(output_dir)
+    known = read_corpora(output_dir)
+    known.update(keys)
+    os.makedirs(output_dir, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(known, f, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def read_corpora(output_dir: str) -> Dict[str, str]:
+    try:
+        with open(corpora_path(output_dir)) as f:
+            d = json.load(f)
+        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_sort_file(path: str) -> Optional[object]:
+    """A saved SortedResult read from *path*, or None if it can't be read."""
     from ._base import SortedResult
-    path = sort_path(output_dir, corpus_item, adapter)
     try:
         with np.load(path, allow_pickle=False) as z:
             units = [int(u) for u in z["unit_ids"]]

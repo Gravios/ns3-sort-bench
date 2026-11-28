@@ -191,6 +191,20 @@ ns3sb compare runs/baseline runs/candidate --metric accuracy --adapter fiber_kit
 ```
 
 `compare` joins on `(corpus_item, candidate_adapter, scorer, metric)`.
+
+```sh
+# Re-score a run's saved sorts against the reference as it is NOW (no sorting),
+# e.g. after another curation session on the reference .clu
+ns3sb rescore runs/0312-g8
+ns3sb rescore runs/old-run --corpus lab:/data/0312/s.yaml:8:stderiv_C5:fc_unmix_t2_h
+```
+
+`rescore` reads `<run>/sorts/` and resolves each item's corpus key again from
+`<run>/corpora.json` (written by `run`; pass `--corpus` for runs made before
+it), so a reference still being curated is re-read from disk.  It rewrites
+that item's rows in `scores.csv`, keeps the previous file as
+`scores.prev.csv`, and records the key and the reference's size in
+`rescore.json`.
 Rows present in only one run keep that side's value with the other as `—`.
 
 ## Your own data (lab sessions)
@@ -232,8 +246,10 @@ ns3sb run --corpus lab:/data/0312/sirotaA-jg-000005-20120312.yaml:8:stderiv_C5:c
 # --fk-method stderiv_C5   when the session has more than one stderiv .spk
 ```
 
-A `--fk-config` with a `pipeline:` of its own replaces the bundled plan; if
-that plan does not end in `fc_unmix`, the readback will not find it.
+A `--fk-config` with a `pipeline:` of its own replaces the bundled plan, and
+the readback follows it: the last step's `out:` is the fiber_kit result, every
+earlier `out:` a stage row, and fiber-unmix's hierarchical `<out>_h` a stage
+row too (e.g. `fiber_kit@fc_unmix_t2_h` for the 0312 `_t2` plan).
 
 ## Dashboard
 

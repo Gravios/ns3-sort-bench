@@ -99,6 +99,7 @@ def cmd_run(args) -> int:
                           skip_done=args.skip_done)
 
     from ...runners.sorter_grid import expand_corpus_key
+    item_keys = {}
     for key in corpus_keys:
         try:
             expanded = expand_corpus_key(key)
@@ -112,12 +113,16 @@ def cmd_run(args) -> int:
                 eprint(str(e))
                 return 1
             bench.add_corpus(c)
+            item_keys[c.name] = sub_key
 
     for name in adapter_names:
         bench.add_adapter(adapter_registry[name])
     for name in scorer_names:
         bench.add_scorer(scorer_registry[name])
 
+    # Which key each item came from, for `ns3sb rescore`.
+    from ...sort_store import record_corpora
+    record_corpora(output_dir, item_keys)
     df = bench.go()
     if not args.quiet:
         print(f"\nwrote {output_dir}/scores.csv  ({len(df)} rows)")
