@@ -226,6 +226,38 @@ def shared_session_base(output_dir: str, corpus: Corpus) -> str:
         output_dir, SHARED_DIRNAME, _slugify(corpus.name), "sim_session"))
 
 
+def _write_group_fil(recording, base: str, chunk: int = 1 << 22) -> None:
+    """``<base>.fil`` / ``.dat`` / ``.yaml`` / ``.probe`` for a channel
+    subset of a lab session, streamed in chunks (int16, as read)."""
+    n_samp = int(recording.get_num_samples(0))
+    n_ch = int(recording.get_num_channels())
+    fil = base + ".fil"
+    if not _fil_is_complete(fil, n_samp, n_ch):
+        for stale in (fil, base + ".dat"):
+            if os.path.exists(stale):
+                os.remove(stale)
+        tmp = fil + ".tmp"
+        with open(tmp, "wb") as f:
+            for start in range(0, n_samp, chunk):
+                tr = recording.get_traces(start_frame=start,
+                                          end_frame=min(n_samp, start + chunk))
+                tr = np.asarray(tr)
+                if tr.dtype != np.int16:
+                    tr = np.clip(np.rint(tr), -32768, 32767).astype(np.int16)
+                f.write(np.ascontiguousarray(tr).tobytes())
+        os.replace(tmp, fil)
+    _relink(fil, base + ".dat")
+    # The session's own yaml describes the whole probe; this file has
+    # only the group's channels.
+    sr = float(recording.get_sampling_frequency())
+    probe_path = base + ".probe"
+    _write_probe_file(probe_path, _channel_locations_or_default(recording, n_ch))
+    noise_s = min(float(_NDM_DETECT_DEFAULTS.get("duration", "10")),
+                  (n_samp / sr) * 0.5)
+    _write_yaml_with_programs(base + ".yaml", n_ch=n_ch, sr=sr,
+                              noise_duration_s=noise_s, probe_path=probe_path)
+
+
 def prepare_shared_session(output_dir: str, corpus: Corpus, *,
                             n_samples: int = _NS_SAMPLES,
                             peak_sample: int = _NS_PEAK) -> str:
@@ -247,10 +279,17 @@ def prepare_shared_session(output_dir: str, corpus: Corpus, *,
     n_ch = int(recording.get_num_channels())
     sess_base = recording.get_annotation("session_base", None) \
         if hasattr(recording, "get_annotation") else None
-    if sess_base and (os.path.exists(sess_base + ".fil")
-                       or os.path.exists(sess_base + ".dat")):
-        src = sess_base + ".fil" if os.path.exists(sess_base + ".fil") \
-            else sess_base + ".dat"
+    src = None
+    if sess_base:
+        src = next((sess_base + e for e in (".fil", ".dat")
+                    if os.path.exists(sess_base + e)), None)
+    if src and not _fil_is_complete(src, n_samp, n_ch):
+        # A lab electrode group: the session file holds every channel of
+        # the probe, the recording only this group's, so a link would be
+        # the wrong size.  Write the group's channels instead.  They come
+        # from the session .fil, already filtered, so no second bandpass.
+        _write_group_fil(recording, base)
+    elif src:
         _relink(src, base + ".fil")
         _relink(src, base + ".dat")
         if not os.path.exists(base + ".yaml"):
