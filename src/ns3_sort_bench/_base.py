@@ -262,7 +262,8 @@ class BenchmarkRun:
     # sort in <output_dir>/sort_summaries.json is not sorted again: its
     # earlier rows in scores.csv and its summaries (stage results
     # included) are carried into this run's output.  Failed pairs are
-    # retried.  Wired from `ns3sb run --skip-done`.
+    # retried, and so is a finished pair with no Klusters session when
+    # export_klusters is on.  Wired from `ns3sb run --skip-done`.
     skip_done: bool = False
 
     def add_corpus(self, c: Corpus) -> "BenchmarkRun":
@@ -306,6 +307,12 @@ class BenchmarkRun:
                 for s in prior_summaries
                 if "error" not in s and "@" not in str(s.get("adapter", ""))}
         done &= grid
+        if self.export_klusters:
+            # A sort that was never exported can't be exported now (the
+            # sort itself isn't saved), so sort it again.
+            from .klusters_export import exported_session_exists
+            done = {(item, name) for item, name in done
+                    if exported_session_exists(self.output_dir, item, name)}
         rerun = grid - done
 
         summaries = [s for s in prior_summaries
@@ -337,9 +344,10 @@ class BenchmarkRun:
         for corpus in self.corpora:
             self._log(f"corpus: {corpus.name} ({corpus.kind})")
             ref = corpus.ground_truth
-            # Successful candidates for THIS corpus, keyed by adapter name;
-            # consumed by the Klusters export at the end of the inner loop.
+            # Successful candidates for THIS corpus, keyed by adapter name.
             candidates_for_corpus: Dict[str, SortedResult] = {}
+            # The ground truth is exported along with the first sorter.
+            gt_exported = False
 
             # ns3 preprocessing first: one shared bandpassed .fil/.dat/.yaml
             # per item, before any sorter runs, so every
@@ -458,21 +466,25 @@ class BenchmarkRun:
                                       f"{type(e).__name__}: {e}")
                 checkpoint()
 
-            # End of adapter loop for THIS corpus.  Write per-adapter Klusters
-            # sessions (via neurosuite-3's ndm_* binaries) when requested.
-            if self.export_klusters and candidates_for_corpus:
-                try:
-                    from .klusters_export import export_klusters_session
-                    sess_dirs = export_klusters_session(
-                        self.output_dir, corpus, candidates_for_corpus,
-                    )
-                    # Each sorter now lives under its OWN klusters_<sorter>/
-                    # top-level; list one line per session dir so a returning
-                    # user sees exactly where to open each one for curation.
-                    for sd in sess_dirs:
-                        self._log(f"  klusters session: {sd}")
-                except Exception as e:
-                    self._log(f"  klusters export FAILED: {type(e).__name__}: {e}")
+                # Klusters sessions for this sorter (and its stages) right
+                # away, not after the last sorter: they show up as each
+                # sort finishes and survive a later crash.
+                if self.export_klusters:
+                    names = [adapter.name] + [f"{adapter.name}@{t}"
+                                              for t in stage_results]
+                    try:
+                        from .klusters_export import export_klusters_session
+                        sess_dirs = export_klusters_session(
+                            self.output_dir, corpus,
+                            {n: candidates_for_corpus[n] for n in names},
+                            include_ground_truth=not gt_exported,
+                        )
+                        gt_exported = True
+                        for sd in sess_dirs:
+                            self._log(f"    klusters session: {sd}")
+                    except Exception as e:
+                        self._log(f"    klusters export FAILED: "
+                                  f"{type(e).__name__}: {e}")
 
         df = _write_outputs(pd, self.output_dir, rows, sort_summaries)
         self._log(f"wrote {os.path.join(self.output_dir, 'scores.csv')} ({len(rows)} rows)")

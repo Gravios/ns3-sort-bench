@@ -120,3 +120,72 @@ def test_skip_done_on_empty_dir(tmp_path):
     a = FakeAdapter("a")
     _bench(tmp_path / "new", [a], skip_done=True).go()
     assert a.calls == 1
+
+
+# ─── Klusters export, per sorter, and its interplay with --skip-done ──────
+def _fake_export(monkeypatch):
+    import ns3_sort_bench.klusters_export as ke
+    calls = []
+
+    def export(output_dir, corpus, candidates, *, include_ground_truth=True, **kw):
+        names = list(candidates) + (["ground_truth"] if include_ground_truth else [])
+        calls.append(names)
+        out = []
+        for n in names:
+            base = os.path.join(output_dir, f"klusters_{ke._slugify(n)}",
+                                ke._slugify(corpus.name), "sim_session")
+            os.makedirs(os.path.dirname(base), exist_ok=True)
+            open(ke._klusters_path(base, "clu", 1, method=ke._NS3_METHOD), "w").close()
+            out.append(os.path.dirname(base))
+        return out
+
+    monkeypatch.setattr(ke, "export_klusters_session", export)
+    monkeypatch.setattr(ke, "prepare_shared_session", lambda *a, **k: None)
+    return calls
+
+
+def _bench_k(out, adapters, skip_done):
+    b = _bench(out, adapters, skip_done)
+    b.export_klusters = True
+    return b
+
+
+def test_export_runs_after_each_sorter(tmp_path, monkeypatch):
+    calls = _fake_export(monkeypatch)
+    _bench_k(tmp_path, [FakeAdapter("a", stages=True), FakeAdapter("b"),
+                        FakeAdapter("s", fail=True)], skip_done=False).go()
+    # one export per successful sorter, stages with their parent, GT once
+    assert calls == [["a", "a@s1", "ground_truth"], ["b"]]
+
+
+def test_export_survives_a_crash_mid_run(tmp_path, monkeypatch):
+    from ns3_sort_bench.klusters_export import exported_session_exists
+    _fake_export(monkeypatch)
+
+    class Killer(FakeAdapter):
+        def sort(self, *a, **k):
+            raise KeyboardInterrupt
+
+    try:
+        _bench_k(tmp_path, [FakeAdapter("a"), Killer("k")], skip_done=False).go()
+    except KeyboardInterrupt:
+        pass
+    assert exported_session_exists(str(tmp_path), "item", "a")
+
+
+def test_skip_done_resorts_pairs_never_exported(tmp_path, monkeypatch):
+    calls = _fake_export(monkeypatch)
+    # first run without export: sorted and scored, no Klusters sessions
+    _bench(tmp_path, [FakeAdapter("a"), FakeAdapter("b")], skip_done=False).go()
+    # resume with export on: both are sorted again, since a sort is not
+    # saved and only a fresh one can be exported
+    a2, b2 = FakeAdapter("a"), FakeAdapter("b")
+    _bench_k(tmp_path, [a2, b2], skip_done=True).go()
+    assert (a2.calls, b2.calls) == (1, 1)
+    assert calls == [["a", "ground_truth"], ["b"]]
+    assert _candidates(tmp_path) == ["a", "b"]
+    # and once exported, they are skipped
+    a3, b3 = FakeAdapter("a"), FakeAdapter("b")
+    _bench_k(tmp_path, [a3, b3], skip_done=True).go()
+    assert (a3.calls, b3.calls) == (0, 0)
+    assert _candidates(tmp_path) == ["a", "b"]

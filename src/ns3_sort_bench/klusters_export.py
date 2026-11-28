@@ -407,6 +407,15 @@ def export_adapter_session(output_dir: str, corpus: Corpus,
     return sess_dir
 
 
+def exported_session_exists(output_dir: str, corpus_name: str,
+                            adapter_name: str, *, group: int = 1,
+                            method: str = _NS3_METHOD) -> bool:
+    """True if export_adapter_session already wrote this sort's .clu."""
+    base = os.path.join(output_dir, f"klusters_{_slugify(adapter_name)}",
+                        _slugify(corpus_name), "sim_session")
+    return os.path.exists(_klusters_path(base, "clu", group, method=method))
+
+
 def export_klusters_session(output_dir: str, corpus: Corpus,
                               candidates: Mapping[str, SortedResult],
                               *, include_ground_truth: bool = True,

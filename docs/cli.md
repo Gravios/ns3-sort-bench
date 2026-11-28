@@ -108,8 +108,14 @@ a crash or a kill keeps what finished.  With `--skip-done`, an
 its earlier scores (fiber_kit's `@fc_*` stages included) are kept.  Failed and
 new pairs are sorted.  Results for adapters left out of this run's
 `--adapters` stay in the files too.  A kept score is the one computed back
-then, so after a scorer fix re-run without `--skip-done`.  With
-`--export-klusters`, only the pairs sorted this time are exported.
+then, so after a scorer fix re-run without `--skip-done`.
+
+`--export-klusters` (off unless given, or set in the plan) writes each
+sorter's Klusters session to `<out>/klusters_<sorter>/<item>/` as soon as that
+sorter finishes, fiber_kit's stages to `klusters_fiber_kit_fc_*`, and the
+reference to `klusters_ground_truth`.  Sorts are not saved otherwise, so with
+both flags a finished pair that has no Klusters session yet is sorted again
+to make one.
 
 Flag precedence: CLI flags > plan > defaults.  CLI flags never mutate
 the plan — add to the plan with `load` / `set` for persistence.
